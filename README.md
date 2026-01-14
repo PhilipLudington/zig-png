@@ -200,6 +200,10 @@ pub fn encodeStreaming(allocator: Allocator, header: png.Header) !void {
 }
 ```
 
+## Examples
+
+For complete working examples, see the [zig-png-examples](https://github.com/PhilipLudington/zig-png-examples) repository.
+
 ## API Reference
 
 ### Types
