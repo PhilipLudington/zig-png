@@ -267,24 +267,26 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ---
 
-## Phase 7: Streaming API
+## Phase 7: Streaming API ✅
 
-### 7.1 Stream Decoder
-- [ ] Create `StreamDecoder` in `src/decoder.zig`
-- [ ] Implement state machine for incremental parsing
-- [ ] Implement `StreamDecoder.feed(data) !?[]Row`
-- [ ] Implement `StreamDecoder.getHeader() ?Header`
-- [ ] Implement `StreamDecoder.finish()`
-- [ ] Handle row-by-row callback
-- [ ] Add tests with chunked input
+### 7.1 Stream Decoder ✅
+- [x] Create `StreamDecoder` in `src/stream_decoder.zig`
+- [x] Implement state machine for incremental parsing
+- [x] Implement `StreamDecoder.feed(data) !?DecodedRow`
+- [x] Implement `StreamDecoder.getHeader() ?Header`
+- [x] Implement `StreamDecoder.finish() !Image`
+- [x] Handle row-by-row output (via `nextRow()`)
+- [x] Add tests with chunked input
+- Note: Interlaced images are not supported in streaming mode
 
-### 7.2 Stream Encoder
-- [ ] Create `StreamEncoder` in `src/encoder.zig`
-- [ ] Implement `StreamEncoder.init(writer, header, options)`
-- [ ] Implement `StreamEncoder.writeRow(pixels)`
-- [ ] Implement `StreamEncoder.finish()`
-- [ ] Buffer and compress rows incrementally
-- [ ] Add tests
+### 7.2 Stream Encoder ✅
+- [x] Create `StreamEncoder` in `src/stream_encoder.zig`
+- [x] Implement `StreamEncoder.init(allocator, header, palette, writer, options)`
+- [x] Implement `StreamEncoder.writeRow(pixels)`
+- [x] Implement `StreamEncoder.finish()`
+- [x] Buffer and compress rows (compression at finish)
+- [x] Add tests
+- Note: Interlaced images are not supported in streaming mode
 
 ---
 
@@ -360,8 +362,9 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - Phase 4: Adam7 Interlacing ✅
 - Phase 5: Compression (Deflate) ✅ (stored and fixed Huffman blocks)
 - Phase 6: Encoding ✅ (full PNG encoder with filtering and compression)
+- Phase 7: Streaming API ✅ (incremental decode/encode for non-interlaced images)
 
-**Next Task:** Phase 7 - Streaming API (optional, for incremental processing)
+**Next Task:** Phase 8 - Ancillary Chunks (optional, for metadata support)
 
 ---
 
@@ -377,6 +380,8 @@ zig-png/
 │   ├── png.zig
 │   ├── decoder.zig
 │   ├── encoder.zig
+│   ├── stream_decoder.zig
+│   ├── stream_encoder.zig
 │   ├── color.zig
 │   ├── filters.zig
 │   ├── interlace.zig

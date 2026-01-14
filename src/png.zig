@@ -11,6 +11,10 @@ const filters = @import("filters.zig");
 const zlib = @import("compression/zlib.zig");
 pub const color = @import("color.zig");
 
+// Streaming API
+pub const stream_decoder = @import("stream_decoder.zig");
+pub const stream_encoder = @import("stream_encoder.zig");
+
 // Re-export public types
 pub const Image = decoder.Image;
 pub const DecodeError = decoder.DecodeError;
@@ -24,6 +28,14 @@ pub const FilterType = color.FilterType;
 pub const FilterStrategy = filters.FilterStrategy;
 pub const InterlaceMethod = color.InterlaceMethod;
 pub const CompressionLevel = zlib.CompressionLevel;
+
+// Re-export streaming types
+pub const StreamDecoder = stream_decoder.StreamDecoder;
+pub const StreamDecodeError = stream_decoder.StreamDecodeError;
+pub const DecodedRow = stream_decoder.DecodedRow;
+pub const StreamEncoder = stream_encoder.StreamEncoder;
+pub const StreamEncodeError = stream_encoder.StreamEncodeError;
+pub const StreamEncodeOptions = stream_encoder.StreamEncodeOptions;
 
 /// PNG file signature
 pub const signature = [_]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
@@ -98,6 +110,9 @@ test {
     _ = @import("utils/adler32.zig");
     _ = @import("utils/bit_reader.zig");
     _ = @import("utils/bit_writer.zig");
+    // Streaming API
+    _ = @import("stream_decoder.zig");
+    _ = @import("stream_encoder.zig");
 }
 
 test "png signature is correct" {
