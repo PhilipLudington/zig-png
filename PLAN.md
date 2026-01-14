@@ -168,27 +168,27 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ---
 
-## Phase 4: Adam7 Interlacing
+## Phase 4: Adam7 Interlacing ✅
 
-### 4.1 Interlace Support
-- [ ] Create `src/interlace.zig`
-- [ ] Define `Adam7` constants (origins, spacings)
-- [ ] Implement `Adam7.passWidth(pass, image_width) u32`
-- [ ] Implement `Adam7.passHeight(pass, image_height) u32`
-- [ ] Implement `Adam7.passRowBytes(pass, header) usize`
-- [ ] Add unit tests for pass dimension calculations
+### 4.1 Interlace Support ✅
+- [x] Create `src/interlace.zig`
+- [x] Define `Adam7` constants (origins, spacings)
+- [x] Implement `Adam7.passWidth(pass, image_width) u32`
+- [x] Implement `Adam7.passHeight(pass, image_height) u32`
+- [x] Implement `Adam7.passRowBytes(pass, header) usize`
+- [x] Add unit tests for pass dimension calculations
 
-### 4.2 Deinterlacing
-- [ ] Implement pass extraction from compressed data
-- [ ] Each pass is filtered independently
-- [ ] Implement `Adam7.deinterlace(passes, output, header)`
-- [ ] Scatter pass pixels to correct positions in output
-- [ ] Add integration tests with interlaced PNGs
+### 4.2 Deinterlacing ✅
+- [x] Implement pass extraction from compressed data
+- [x] Each pass is filtered independently
+- [x] Implement `Adam7.deinterlace(passes, output, header)`
+- [x] Scatter pass pixels to correct positions in output
+- [x] Add integration tests with interlaced PNGs
 
-### 4.3 Interlacing (for encoder)
-- [ ] Implement `Adam7.interlace(input, passes, header)`
-- [ ] Extract pixels for each pass from full image
-- [ ] Add unit tests
+### 4.3 Interlacing (for encoder) ✅
+- [x] Implement `Adam7.interlace(input, passes, header)`
+- [x] Extract pixels for each pass from full image
+- [x] Add unit tests
 
 ---
 
@@ -358,8 +358,9 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - Phase 1: Foundation ✅
 - Phase 2: Decompression (Inflate) ✅
 - Phase 3: Basic Decoding (core functionality) ✅
+- Phase 4: Adam7 Interlacing ✅
 
-**Next Task:** Phase 3.6 - Test Images / Phase 4 - Adam7 Interlacing
+**Next Task:** Phase 3.6 - Test Images / Phase 5 - Compression (Deflate)
 
 ---
 

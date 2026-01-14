@@ -44,7 +44,7 @@ test {
     _ = @import("filters.zig");
     _ = @import("decoder.zig");
     // _ = @import("encoder.zig");
-    // _ = @import("interlace.zig");
+    _ = @import("interlace.zig");
     _ = @import("chunks/chunks.zig");
     _ = @import("chunks/critical.zig");
     // _ = @import("chunks/ancillary.zig");

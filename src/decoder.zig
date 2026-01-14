@@ -12,6 +12,8 @@ const filters = @import("filters.zig");
 const chunks = @import("chunks/chunks.zig");
 const critical = @import("chunks/critical.zig");
 const zlib = @import("compression/zlib.zig");
+const interlace = @import("interlace.zig");
+const Adam7 = interlace.Adam7;
 
 /// Decoder errors.
 pub const DecodeError = error{
@@ -128,42 +130,15 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return error.PrematureEnd;
     }
 
-    // Decompress IDAT data
-    // Calculate required output size: all rows including filter bytes
-    const raw_size = header.rawDataSize();
-    var raw_data = try allocator.alloc(u8, raw_size);
-    defer allocator.free(raw_data);
-
-    const decompressed_len = zlib.decompress(idat_data.items, raw_data) catch
-        return error.DecompressionFailed;
-
-    if (decompressed_len != raw_size) {
-        return error.DecompressionFailed;
-    }
-
-    // Unfilter scanlines
-    const bytes_per_row = header.bytesPerRowWithFilter();
-    const bpp = header.bytesPerPixel();
-
-    var prev_row: ?[]const u8 = null;
-    for (0..header.height) |y| {
-        const row_start = y * bytes_per_row;
-        const row = raw_data[row_start..][0..bytes_per_row];
-
-        try filters.unfilterRow(row, prev_row, bpp);
-        prev_row = row;
-    }
-
-    // Allocate final pixel buffer (without filter bytes)
+    // Allocate final pixel buffer
     const pixel_row_bytes = header.bytesPerRow();
     const pixels = try allocator.alloc(u8, pixel_row_bytes * header.height);
     errdefer allocator.free(pixels);
 
-    // Copy unfiltered data (skip filter byte from each row)
-    for (0..header.height) |y| {
-        const src_start = y * bytes_per_row + 1; // +1 to skip filter byte
-        const dst_start = y * pixel_row_bytes;
-        @memcpy(pixels[dst_start..][0..pixel_row_bytes], raw_data[src_start..][0..pixel_row_bytes]);
+    if (header.isInterlaced()) {
+        try decodeInterlaced(allocator, header, idat_data.items, pixels);
+    } else {
+        try decodeNonInterlaced(allocator, header, idat_data.items, pixels);
     }
 
     return Image{
@@ -172,6 +147,123 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
         .palette = palette,
         .allocator = allocator,
     };
+}
+
+/// Decode a non-interlaced PNG image.
+fn decodeNonInterlaced(
+    allocator: Allocator,
+    header: critical.Header,
+    compressed_data: []const u8,
+    pixels: []u8,
+) DecodeError!void {
+    // Calculate required output size: all rows including filter bytes
+    const raw_size = header.rawDataSize();
+    var raw_data = try allocator.alloc(u8, raw_size);
+    defer allocator.free(raw_data);
+
+    const decompressed_len = zlib.decompress(compressed_data, raw_data) catch
+        return error.DecompressionFailed;
+
+    if (decompressed_len != raw_size) {
+        return error.DecompressionFailed;
+    }
+
+    // Unfilter scanlines
+    const bytes_per_row_with_filter = header.bytesPerRowWithFilter();
+    const bytes_per_row = header.bytesPerRow();
+    const bpp = header.bytesPerPixel();
+
+    var prev_row: ?[]const u8 = null;
+    for (0..header.height) |y| {
+        const row_start = y * bytes_per_row_with_filter;
+        const row = raw_data[row_start..][0..bytes_per_row_with_filter];
+
+        try filters.unfilterRow(row, prev_row, bpp);
+        prev_row = row;
+    }
+
+    // Copy unfiltered data (skip filter byte from each row)
+    for (0..header.height) |y| {
+        const src_start = y * bytes_per_row_with_filter + 1; // +1 to skip filter byte
+        const dst_start = y * bytes_per_row;
+        @memcpy(pixels[dst_start..][0..bytes_per_row], raw_data[src_start..][0..bytes_per_row]);
+    }
+}
+
+/// Decode an interlaced (Adam7) PNG image.
+fn decodeInterlaced(
+    allocator: Allocator,
+    header: critical.Header,
+    compressed_data: []const u8,
+    pixels: []u8,
+) DecodeError!void {
+    // Calculate total raw size for all passes
+    const raw_size = Adam7.totalInterlacedBytes(header);
+    var raw_data = try allocator.alloc(u8, raw_size);
+    defer allocator.free(raw_data);
+
+    const decompressed_len = zlib.decompress(compressed_data, raw_data) catch
+        return error.DecompressionFailed;
+
+    if (decompressed_len != raw_size) {
+        return error.DecompressionFailed;
+    }
+
+    const bpp = header.bytesPerPixel();
+
+    // Process each pass: unfilter then extract pixel data
+    var pass_pixels: [7][]u8 = undefined;
+    var pass_allocations: [7]?[]u8 = [_]?[]u8{null} ** 7;
+    defer {
+        for (pass_allocations) |maybe_alloc| {
+            if (maybe_alloc) |alloc_slice| {
+                allocator.free(alloc_slice);
+            }
+        }
+    }
+
+    var raw_offset: usize = 0;
+    for (0..interlace.pass_count) |p| {
+        const pass: u3 = @intCast(p);
+        const pass_h = Adam7.passHeight(pass, header.height);
+        const pass_raw_bytes = Adam7.passRawBytes(pass, header);
+        const pass_row_bytes = Adam7.passRowBytes(pass, header);
+        const pass_row_bytes_with_filter = Adam7.passRowBytesWithFilter(pass, header);
+
+        if (pass_h == 0 or pass_raw_bytes == 0) {
+            pass_pixels[p] = &[_]u8{};
+            continue;
+        }
+
+        // Unfilter this pass's rows
+        var prev_row: ?[]const u8 = null;
+        for (0..pass_h) |y| {
+            const row_start = raw_offset + y * pass_row_bytes_with_filter;
+            const row = raw_data[row_start..][0..pass_row_bytes_with_filter];
+            try filters.unfilterRow(row, prev_row, bpp);
+            prev_row = row;
+        }
+
+        // Allocate and copy pixel data (without filter bytes)
+        const pass_pixel_bytes = pass_row_bytes * pass_h;
+        const pass_pixel_data = try allocator.alloc(u8, pass_pixel_bytes);
+        pass_allocations[p] = pass_pixel_data;
+        pass_pixels[p] = pass_pixel_data;
+
+        for (0..pass_h) |y| {
+            const src_start = raw_offset + y * pass_row_bytes_with_filter + 1;
+            const dst_start = y * pass_row_bytes;
+            @memcpy(pass_pixel_data[dst_start..][0..pass_row_bytes], raw_data[src_start..][0..pass_row_bytes]);
+        }
+
+        raw_offset += pass_raw_bytes;
+    }
+
+    // Initialize output to zero (important for sub-byte formats)
+    @memset(pixels, 0);
+
+    // Deinterlace: scatter pass pixels to final image
+    Adam7.deinterlace(pass_pixels, pixels, header);
 }
 
 /// Decode a PNG image from a file path.
