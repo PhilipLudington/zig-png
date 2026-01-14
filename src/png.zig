@@ -41,17 +41,17 @@ pub fn decodeFile(allocator: std.mem.Allocator, path: []const u8) !void {
 test {
     // Import all test modules
     _ = @import("color.zig");
-    // _ = @import("filters.zig");
-    // _ = @import("decoder.zig");
+    _ = @import("filters.zig");
+    _ = @import("decoder.zig");
     // _ = @import("encoder.zig");
     // _ = @import("interlace.zig");
     _ = @import("chunks/chunks.zig");
     _ = @import("chunks/critical.zig");
     // _ = @import("chunks/ancillary.zig");
-    // _ = @import("compression/huffman.zig");
-    // _ = @import("compression/inflate.zig");
+    _ = @import("compression/huffman.zig");
+    _ = @import("compression/inflate.zig");
     // _ = @import("compression/deflate.zig");
-    // _ = @import("compression/zlib.zig");
+    _ = @import("compression/zlib.zig");
     // _ = @import("compression/lz77.zig");
     _ = @import("utils/crc32.zig");
     _ = @import("utils/adler32.zig");

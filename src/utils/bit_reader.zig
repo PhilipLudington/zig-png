@@ -82,6 +82,31 @@ pub const BitReader = struct {
         self.bits_in_buffer = 0;
     }
 
+    /// Peek at up to 16 bits without consuming them.
+    /// Fills the buffer as needed to satisfy the request.
+    pub fn peekBits(self: *Self, n: u5) BitReaderError!u16 {
+        // Fill buffer if needed
+        while (self.bits_in_buffer < n) {
+            if (self.pos >= self.data.len) {
+                if (self.bits_in_buffer >= n) break;
+                return error.EndOfStream;
+            }
+            self.bit_buffer |= @as(u32, self.data[self.pos]) << self.bits_in_buffer;
+            self.pos += 1;
+            self.bits_in_buffer += 8;
+        }
+
+        // Extract n bits without consuming
+        const mask: u32 = (@as(u32, 1) << n) - 1;
+        return @intCast(self.bit_buffer & mask);
+    }
+
+    /// Consume n bits that were previously peeked.
+    pub fn consumeBits(self: *Self, n: u5) void {
+        self.bit_buffer >>= n;
+        self.bits_in_buffer -= n;
+    }
+
     /// Check if we've reached the end of the stream.
     pub fn isAtEnd(self: Self) bool {
         return self.pos >= self.data.len and self.bits_in_buffer == 0;
@@ -212,4 +237,33 @@ test "read 16 bits" {
     var reader = BitReader.init(&data);
 
     try std.testing.expectEqual(@as(u16, 0x1234), try reader.readBits(16));
+}
+
+test "peekBits and consumeBits" {
+    const data = [_]u8{ 0xB4, 0xCA };
+    var reader = BitReader.init(&data);
+
+    // Peek 4 bits without consuming
+    try std.testing.expectEqual(@as(u16, 0x4), try reader.peekBits(4));
+    // Peek again - should return same value
+    try std.testing.expectEqual(@as(u16, 0x4), try reader.peekBits(4));
+
+    // Consume those 4 bits
+    reader.consumeBits(4);
+
+    // Now peek should return next 4 bits
+    try std.testing.expectEqual(@as(u16, 0xB), try reader.peekBits(4));
+    reader.consumeBits(4);
+
+    // Peek more bits than remaining
+    try std.testing.expectEqual(@as(u16, 0xCA), try reader.peekBits(8));
+}
+
+test "peekBits extended" {
+    const data = [_]u8{ 0xFF, 0x00, 0xAA };
+    var reader = BitReader.init(&data);
+
+    // Peek 15 bits (needs to load multiple bytes)
+    const peeked = try reader.peekBits(15);
+    try std.testing.expectEqual(@as(u16, 0x00FF), peeked);
 }

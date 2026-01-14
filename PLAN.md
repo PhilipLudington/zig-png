@@ -4,159 +4,159 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ---
 
-## Phase 1: Foundation
+## Phase 1: Foundation ✅
 
-### 1.1 Project Setup
-- [ ] Create `src/png.zig` - Main entry point with public API re-exports
-- [ ] Create `build.zig` - Build configuration with test support
-- [ ] Add `.gitignore` for Zig cache directories
+### 1.1 Project Setup ✅
+- [x] Create `src/png.zig` - Main entry point with public API re-exports
+- [x] Create `build.zig` - Build configuration with test support
+- [x] Add `.gitignore` for Zig cache directories
 
-### 1.2 CRC32 Implementation
-- [ ] Create `src/utils/crc32.zig`
-- [ ] Implement CRC32 lookup table (precomputed at comptime)
-- [ ] Implement `crc32(data: []const u8) u32` function
-- [ ] Implement streaming `Crc32` struct with `update()` and `final()`
-- [ ] Add unit tests for known CRC32 values
+### 1.2 CRC32 Implementation ✅
+- [x] Create `src/utils/crc32.zig`
+- [x] Implement CRC32 lookup table (precomputed at comptime)
+- [x] Implement `crc32(data: []const u8) u32` function
+- [x] Implement streaming `Crc32` struct with `update()` and `final()`
+- [x] Add unit tests for known CRC32 values
 
-### 1.3 Adler32 Implementation
-- [ ] Create `src/utils/adler32.zig`
-- [ ] Implement `adler32(data: []const u8) u32` function
-- [ ] Implement streaming `Adler32` struct with `update()` and `final()`
-- [ ] Add unit tests for known Adler32 values
+### 1.3 Adler32 Implementation ✅
+- [x] Create `src/utils/adler32.zig`
+- [x] Implement `adler32(data: []const u8) u32` function
+- [x] Implement streaming `Adler32` struct with `update()` and `final()`
+- [x] Add unit tests for known Adler32 values
 
-### 1.4 Bit Reader
-- [ ] Create `src/utils/bit_reader.zig`
-- [ ] Implement `BitReader` struct wrapping any reader
-- [ ] Implement `readBits(n: u4) !u16` - read n bits (LSB first for deflate)
-- [ ] Implement `readByte() !u8` - read aligned byte
-- [ ] Implement `alignToByte()` - skip to next byte boundary
-- [ ] Add unit tests
+### 1.4 Bit Reader ✅
+- [x] Create `src/utils/bit_reader.zig`
+- [x] Implement `BitReader` struct wrapping any reader
+- [x] Implement `readBits(n: u4) !u16` - read n bits (LSB first for deflate)
+- [x] Implement `readByte() !u8` - read aligned byte
+- [x] Implement `alignToByte()` - skip to next byte boundary
+- [x] Add unit tests
 
-### 1.5 Bit Writer
-- [ ] Create `src/utils/bit_writer.zig`
-- [ ] Implement `BitWriter` struct wrapping any writer
-- [ ] Implement `writeBits(value: u16, n: u4) !void`
-- [ ] Implement `flush() !void` - flush partial byte
-- [ ] Add unit tests
+### 1.5 Bit Writer ✅
+- [x] Create `src/utils/bit_writer.zig`
+- [x] Implement `BitWriter` struct wrapping any writer
+- [x] Implement `writeBits(value: u16, n: u4) !void`
+- [x] Implement `flush() !void` - flush partial byte
+- [x] Add unit tests
 
-### 1.6 Core Types
-- [ ] Create `src/color.zig`
-- [ ] Define `ColorType` enum (grayscale, rgb, indexed, grayscale_alpha, rgba)
-- [ ] Define `BitDepth` enum (1, 2, 4, 8, 16)
-- [ ] Define `InterlaceMethod` enum (none, adam7)
-- [ ] Define `FilterType` enum (none, sub, up, average, paeth)
-- [ ] Implement `isValidColorBitDepthCombo()` validation
-- [ ] Add `bytesPerPixel()` helper
+### 1.6 Core Types ✅
+- [x] Create `src/color.zig`
+- [x] Define `ColorType` enum (grayscale, rgb, indexed, grayscale_alpha, rgba)
+- [x] Define `BitDepth` enum (1, 2, 4, 8, 16)
+- [x] Define `InterlaceMethod` enum (none, adam7)
+- [x] Define `FilterType` enum (none, sub, up, average, paeth)
+- [x] Implement `isValidColorBitDepthCombo()` validation
+- [x] Add `bytesPerPixel()` helper
 
-### 1.7 Chunk Framework
-- [ ] Create `src/chunks/chunks.zig`
-- [ ] Define `Chunk` struct (length, type, data, crc)
-- [ ] Implement `readChunk(reader) !Chunk` - parse chunk from stream
-- [ ] Implement `writeChunk(writer, type, data) !void`
-- [ ] Implement chunk property methods (`isCritical`, `isPublic`, `isSafeToCopy`)
-- [ ] Add CRC validation
-- [ ] Add unit tests
+### 1.7 Chunk Framework ✅
+- [x] Create `src/chunks/chunks.zig`
+- [x] Define `Chunk` struct (length, type, data, crc)
+- [x] Implement `readChunk(reader) !Chunk` - parse chunk from stream
+- [x] Implement `writeChunk(writer, type, data) !void`
+- [x] Implement chunk property methods (`isCritical`, `isPublic`, `isSafeToCopy`)
+- [x] Add CRC validation
+- [x] Add unit tests
 
-### 1.8 IHDR Parsing
-- [ ] Create `src/chunks/critical.zig`
-- [ ] Define `Header` struct with all IHDR fields
-- [ ] Implement `parseIhdr(data: []const u8) !Header`
-- [ ] Implement `Header.bytesPerPixel()`, `Header.bytesPerRow()`
-- [ ] Implement `Header.isValid()` - validate field combinations
-- [ ] Add unit tests
+### 1.8 IHDR Parsing ✅
+- [x] Create `src/chunks/critical.zig`
+- [x] Define `Header` struct with all IHDR fields
+- [x] Implement `parseIhdr(data: []const u8) !Header`
+- [x] Implement `Header.bytesPerPixel()`, `Header.bytesPerRow()`
+- [x] Implement `Header.isValid()` - validate field combinations
+- [x] Add unit tests
 
-### 1.9 PNG Signature
-- [ ] Add PNG signature constant: `{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' }`
-- [ ] Implement signature validation in decoder
-
----
-
-## Phase 2: Decompression (Inflate)
-
-### 2.1 Huffman Decoding
-- [ ] Create `src/compression/huffman.zig`
-- [ ] Define `HuffmanTree` struct
-- [ ] Implement `HuffmanTree.build(code_lengths: []const u4) !HuffmanTree`
-- [ ] Implement `HuffmanTree.decode(bit_reader) !u16`
-- [ ] Add fixed literal/length tree (RFC 1951 section 3.2.6)
-- [ ] Add fixed distance tree
-- [ ] Add unit tests
-
-### 2.2 Inflate Core
-- [ ] Create `src/compression/inflate.zig`
-- [ ] Define `Inflate` struct with 32KB sliding window
-- [ ] Implement block header parsing (BFINAL, BTYPE)
-- [ ] Implement uncompressed block handling (BTYPE=00)
-- [ ] Implement fixed Huffman block decoding (BTYPE=01)
-- [ ] Add unit tests with known compressed data
-
-### 2.3 Dynamic Huffman
-- [ ] Implement dynamic Huffman header parsing (BTYPE=10)
-- [ ] Parse HLIT, HDIST, HCLEN
-- [ ] Decode code length alphabet
-- [ ] Build literal/length and distance trees
-- [ ] Add unit tests
-
-### 2.4 LZ77 Decoding
-- [ ] Implement length/distance decoding in inflate
-- [ ] Handle extra bits for lengths (257-285)
-- [ ] Handle extra bits for distances (0-29)
-- [ ] Copy from sliding window
-- [ ] Add unit tests
-
-### 2.5 Zlib Wrapper
-- [ ] Create `src/compression/zlib.zig`
-- [ ] Implement `ZlibReader` wrapping inflate
-- [ ] Parse CMF/FLG header bytes
-- [ ] Validate compression method (CM=8)
-- [ ] Validate window size (CINFO)
-- [ ] Verify Adler32 checksum at end
-- [ ] Add unit tests
+### 1.9 PNG Signature ✅
+- [x] Add PNG signature constant: `{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' }`
+- [x] Implement signature validation in decoder
 
 ---
 
-## Phase 3: Basic Decoding
+## Phase 2: Decompression (Inflate) ✅
 
-### 3.1 Filter Reconstruction
-- [ ] Create `src/filters.zig`
-- [ ] Implement `unfilterNone()` - no-op
-- [ ] Implement `unfilterSub(row, bpp)` - add left neighbor
-- [ ] Implement `unfilterUp(row, prev_row)` - add above neighbor
-- [ ] Implement `unfilterAverage(row, prev_row, bpp)` - add average
-- [ ] Implement `unfilterPaeth(row, prev_row, bpp)` - Paeth predictor
-- [ ] Implement `paethPredictor(a, b, c) u8`
-- [ ] Implement `unfilter(filter_type, row, prev_row, bpp)` dispatcher
-- [ ] Add unit tests for each filter type
+### 2.1 Huffman Decoding ✅
+- [x] Create `src/compression/huffman.zig`
+- [x] Define `HuffmanTree` struct
+- [x] Implement `HuffmanTree.build(code_lengths: []const u4) !HuffmanTree`
+- [x] Implement `HuffmanTree.decode(bit_reader) !u16`
+- [x] Add fixed literal/length tree (RFC 1951 section 3.2.6)
+- [x] Add fixed distance tree
+- [x] Add unit tests
 
-### 3.2 Image Structure
-- [ ] Define `Image` struct in `src/png.zig`
-- [ ] Fields: header, pixels, palette, transparency, allocator
-- [ ] Implement `Image.deinit()`
-- [ ] Implement `Image.getPixel(x, y) Pixel`
-- [ ] Implement `Image.rowBytes(y) []u8`
-- [ ] Define `Pixel` union type
+### 2.2 Inflate Core ✅
+- [x] Create `src/compression/inflate.zig`
+- [x] Define `Inflate` struct with 32KB sliding window
+- [x] Implement block header parsing (BFINAL, BTYPE)
+- [x] Implement uncompressed block handling (BTYPE=00)
+- [x] Implement fixed Huffman block decoding (BTYPE=01)
+- [x] Add unit tests with known compressed data
 
-### 3.3 Decoder Core
-- [ ] Create `src/decoder.zig`
-- [ ] Implement signature verification
-- [ ] Implement chunk iteration loop
-- [ ] Collect IDAT chunks into single compressed stream
-- [ ] Decompress IDAT data
-- [ ] Unfilter each row
-- [ ] Store pixels in Image struct
-- [ ] Handle all bit depths (1, 2, 4, 8, 16)
-- [ ] Handle all color types
+### 2.3 Dynamic Huffman ✅
+- [x] Implement dynamic Huffman header parsing (BTYPE=10)
+- [x] Parse HLIT, HDIST, HCLEN
+- [x] Decode code length alphabet
+- [x] Build literal/length and distance trees
+- [x] Add unit tests
 
-### 3.4 Palette Handling
-- [ ] Parse PLTE chunk (in `critical.zig`)
-- [ ] Validate palette size (1-256 entries, divisible by 3)
-- [ ] Store palette in Image
+### 2.4 LZ77 Decoding ✅
+- [x] Implement length/distance decoding in inflate
+- [x] Handle extra bits for lengths (257-285)
+- [x] Handle extra bits for distances (0-29)
+- [x] Copy from sliding window
+- [x] Add unit tests
+
+### 2.5 Zlib Wrapper ✅
+- [x] Create `src/compression/zlib.zig`
+- [x] Implement `ZlibReader` wrapping inflate
+- [x] Parse CMF/FLG header bytes
+- [x] Validate compression method (CM=8)
+- [x] Validate window size (CINFO)
+- [x] Verify Adler32 checksum at end
+- [x] Add unit tests
+
+---
+
+## Phase 3: Basic Decoding (Partial ✅)
+
+### 3.1 Filter Reconstruction ✅
+- [x] Create `src/filters.zig`
+- [x] Implement `unfilterNone()` - no-op
+- [x] Implement `unfilterSub(row, bpp)` - add left neighbor
+- [x] Implement `unfilterUp(row, prev_row)` - add above neighbor
+- [x] Implement `unfilterAverage(row, prev_row, bpp)` - add average
+- [x] Implement `unfilterPaeth(row, prev_row, bpp)` - Paeth predictor
+- [x] Implement `paethPredictor(a, b, c) u8`
+- [x] Implement `unfilter(filter_type, row, prev_row, bpp)` dispatcher
+- [x] Add unit tests for each filter type
+
+### 3.2 Image Structure ✅
+- [x] Define `Image` struct in `src/decoder.zig`
+- [x] Fields: header, pixels, palette, allocator
+- [x] Implement `Image.deinit()`
+- [x] Implement `Image.getPixel(x, y) []u8`
+- [x] Implement `Image.getRow(y) []u8`
+- [ ] Define `Pixel` union type (deferred)
+
+### 3.3 Decoder Core ✅
+- [x] Create `src/decoder.zig`
+- [x] Implement signature verification
+- [x] Implement chunk iteration loop
+- [x] Collect IDAT chunks into single compressed stream
+- [x] Decompress IDAT data
+- [x] Unfilter each row
+- [x] Store pixels in Image struct
+- [ ] Handle all bit depths (1, 2, 4, 8, 16) - 8-bit working
+- [ ] Handle all color types - grayscale working
+
+### 3.4 Palette Handling ✅
+- [x] Parse PLTE chunk (in `critical.zig`)
+- [x] Validate palette size (1-256 entries, divisible by 3)
+- [x] Store palette in Image
 - [ ] Expand indexed pixels to RGB on demand
 
-### 3.5 Simple Decode API
-- [ ] Implement `png.decode(allocator, reader) !Image`
-- [ ] Implement `png.decodeBuffer(allocator, buffer) !Image`
-- [ ] Implement `png.decodeFile(allocator, path) !Image`
+### 3.5 Simple Decode API (Partial ✅)
+- [x] Implement `decoder.decode(allocator, buffer) !Image`
+- [x] Implement `decoder.decodeFile(allocator, path) !Image`
+- [ ] Wire up to `png.decode()` public API
 - [ ] Add integration tests with real PNG files
 
 ### 3.6 Test Images
@@ -354,7 +354,12 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ## Current Status
 
-**Next Task:** Phase 1.1 - Project Setup
+**Completed:**
+- Phase 1: Foundation ✅
+- Phase 2: Decompression (Inflate) ✅
+- Phase 3: Basic Decoding (core functionality) ✅
+
+**Next Task:** Phase 3.6 - Test Images / Phase 4 - Adam7 Interlacing
 
 ---
 
