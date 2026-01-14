@@ -1,7 +1,8 @@
-//! PNG filter reconstruction (unfiltering).
+//! PNG filter operations for encoding and decoding.
 //!
-//! Implements the five PNG filter types for reconstructing scanlines.
-//! Each filter type uses a different prediction method to improve compression.
+//! Implements the five PNG filter types for reconstructing scanlines (unfiltering)
+//! and applying filters for encoding (filtering). Each filter type uses a different
+//! prediction method to improve compression.
 
 const std = @import("std");
 
@@ -235,4 +236,282 @@ test "unfilterRow wraparound" {
     try unfilterRow(&row, null, 1);
     // 100 + 200 = 300 -> wraps to 44
     try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 200, 44 }, &row);
+}
+
+// ============================================================================
+// Filter Application (Encoding)
+// ============================================================================
+
+/// Strategy for selecting which filter to use per scanline.
+pub const FilterStrategy = enum {
+    /// Always use the None filter (no filtering).
+    none,
+    /// Always use the Sub filter.
+    sub,
+    /// Always use the Up filter.
+    up,
+    /// Always use the Average filter.
+    average,
+    /// Always use the Paeth filter.
+    paeth,
+    /// Adaptively select the best filter per scanline using minimum sum of absolutes heuristic.
+    adaptive,
+};
+
+/// Apply a filter to a scanline for encoding.
+///
+/// Takes raw pixel data (without filter byte) and writes filtered data to the output buffer.
+/// The output buffer should have space for len(src) + 1 bytes (filter byte + filtered data).
+///
+/// Parameters:
+/// - filter: The filter type to apply
+/// - src: Raw pixel data for this scanline
+/// - prev: Raw pixel data for the previous scanline (null for first row)
+/// - dst: Output buffer for filtered data (must be src.len + 1 bytes)
+/// - bpp: Bytes per pixel
+pub fn filterRow(
+    filter: FilterType,
+    src: []const u8,
+    prev: ?[]const u8,
+    dst: []u8,
+    bpp: u8,
+) void {
+    std.debug.assert(dst.len >= src.len + 1);
+
+    dst[0] = @intFromEnum(filter);
+    const out = dst[1..][0..src.len];
+
+    switch (filter) {
+        .none => filterNone(src, out),
+        .sub => filterSub(src, out, bpp),
+        .up => filterUp(src, prev, out),
+        .average => filterAverage(src, prev, out, bpp),
+        .paeth => filterPaeth(src, prev, out, bpp),
+    }
+}
+
+/// Apply None filter: just copy the data.
+fn filterNone(src: []const u8, dst: []u8) void {
+    @memcpy(dst, src);
+}
+
+/// Apply Sub filter: subtract the left neighbor.
+/// Filt(x) = Raw(x) - Raw(x-bpp)
+fn filterSub(src: []const u8, dst: []u8, bpp: u8) void {
+    // First bpp bytes have no left neighbor, so they're unchanged
+    for (0..bpp) |i| {
+        if (i < src.len) {
+            dst[i] = src[i];
+        }
+    }
+    // Remaining bytes: subtract left neighbor
+    for (bpp..src.len) |i| {
+        dst[i] = src[i] -% src[i - bpp];
+    }
+}
+
+/// Apply Up filter: subtract the above neighbor.
+/// Filt(x) = Raw(x) - Prior(x)
+fn filterUp(src: []const u8, prev: ?[]const u8, dst: []u8) void {
+    if (prev) |p| {
+        for (src, 0..) |byte, i| {
+            const above: u8 = if (i < p.len) p[i] else 0;
+            dst[i] = byte -% above;
+        }
+    } else {
+        // No previous row, same as None
+        @memcpy(dst, src);
+    }
+}
+
+/// Apply Average filter: subtract average of left and above.
+/// Filt(x) = Raw(x) - floor((Raw(x-bpp) + Prior(x))/2)
+fn filterAverage(src: []const u8, prev: ?[]const u8, dst: []u8, bpp: u8) void {
+    for (src, 0..) |byte, i| {
+        const left: u16 = if (i >= bpp) src[i - bpp] else 0;
+        const above: u16 = if (prev) |p| (if (i < p.len) p[i] else 0) else 0;
+        dst[i] = byte -% @as(u8, @intCast((left + above) >> 1));
+    }
+}
+
+/// Apply Paeth filter: subtract Paeth predictor.
+/// Filt(x) = Raw(x) - PaethPredictor(Raw(x-bpp), Prior(x), Prior(x-bpp))
+fn filterPaeth(src: []const u8, prev: ?[]const u8, dst: []u8, bpp: u8) void {
+    for (src, 0..) |byte, i| {
+        const a: u8 = if (i >= bpp) src[i - bpp] else 0; // left
+        const b: u8 = if (prev) |p| (if (i < p.len) p[i] else 0) else 0; // above
+        const c: u8 = if (i >= bpp and prev != null) blk: {
+            const p = prev.?;
+            break :blk if (i - bpp < p.len) p[i - bpp] else 0;
+        } else 0; // upper-left
+
+        dst[i] = byte -% paethPredictor(a, b, c);
+    }
+}
+
+/// Select the best filter for a scanline using the minimum sum of absolute differences heuristic.
+/// This is a simple but effective heuristic used by many PNG encoders.
+pub fn selectBestFilter(src: []const u8, prev: ?[]const u8, bpp: u8, scratch: []u8) FilterType {
+    std.debug.assert(scratch.len >= src.len);
+
+    var best_filter: FilterType = .none;
+    var best_sum: u64 = sumOfAbsolutes(src);
+
+    // Try Sub filter
+    filterSub(src, scratch[0..src.len], bpp);
+    const sub_sum = sumOfAbsolutes(scratch[0..src.len]);
+    if (sub_sum < best_sum) {
+        best_sum = sub_sum;
+        best_filter = .sub;
+    }
+
+    // Try Up filter
+    filterUp(src, prev, scratch[0..src.len]);
+    const up_sum = sumOfAbsolutes(scratch[0..src.len]);
+    if (up_sum < best_sum) {
+        best_sum = up_sum;
+        best_filter = .up;
+    }
+
+    // Try Average filter
+    filterAverage(src, prev, scratch[0..src.len], bpp);
+    const avg_sum = sumOfAbsolutes(scratch[0..src.len]);
+    if (avg_sum < best_sum) {
+        best_sum = avg_sum;
+        best_filter = .average;
+    }
+
+    // Try Paeth filter
+    filterPaeth(src, prev, scratch[0..src.len], bpp);
+    const paeth_sum = sumOfAbsolutes(scratch[0..src.len]);
+    if (paeth_sum < best_sum) {
+        best_filter = .paeth;
+    }
+
+    return best_filter;
+}
+
+/// Calculate sum of absolute values treating bytes as signed differences.
+/// Lower sums generally indicate better compressibility.
+fn sumOfAbsolutes(data: []const u8) u64 {
+    var sum: u64 = 0;
+    for (data) |byte| {
+        // Treat byte as signed: 0-127 are positive, 128-255 are negative
+        // We want abs(signed_value) where signed_value is byte interpreted as i8
+        const signed: i8 = @bitCast(byte);
+        sum += @abs(signed);
+    }
+    return sum;
+}
+
+// ============================================================================
+// Filter Application Tests
+// ============================================================================
+
+test "filterRow None" {
+    const src = [_]u8{ 10, 20, 30, 40 };
+    var dst: [5]u8 = undefined;
+    filterRow(.none, &src, null, &dst, 1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 10, 20, 30, 40 }, &dst);
+}
+
+test "filterRow Sub" {
+    // Sub: each byte = raw - left
+    const src = [_]u8{ 10, 15, 18 };
+    var dst: [4]u8 = undefined;
+    filterRow(.sub, &src, null, &dst, 1);
+    // dst[0] = filter byte (1)
+    // dst[1] = 10 - 0 = 10 (no left neighbor)
+    // dst[2] = 15 - 10 = 5
+    // dst[3] = 18 - 15 = 3
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 10, 5, 3 }, &dst);
+}
+
+test "filterRow Sub roundtrip" {
+    // Verify that filter -> unfilter gives back original
+    const original = [_]u8{ 100, 150, 200, 25, 50 };
+    var filtered: [6]u8 = undefined;
+    filterRow(.sub, &original, null, &filtered, 1);
+
+    // Now unfilter
+    try unfilterRow(&filtered, null, 1);
+    try std.testing.expectEqualSlices(u8, &original, filtered[1..]);
+}
+
+test "filterRow Up" {
+    const prev = [_]u8{ 100, 50, 25 };
+    const src = [_]u8{ 110, 60, 35 };
+    var dst: [4]u8 = undefined;
+    filterRow(.up, &src, &prev, &dst, 1);
+    // dst[0] = filter byte (2)
+    // dst[1] = 110 - 100 = 10
+    // dst[2] = 60 - 50 = 10
+    // dst[3] = 35 - 25 = 10
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 2, 10, 10, 10 }, &dst);
+}
+
+test "filterRow Up roundtrip" {
+    const prev = [_]u8{ 0, 100, 50, 25 }; // With filter byte for unfilter
+    const original = [_]u8{ 110, 60, 35 };
+    var filtered: [4]u8 = undefined;
+    filterRow(.up, &original, prev[1..], &filtered, 1);
+
+    try unfilterRow(&filtered, &prev, 1);
+    try std.testing.expectEqualSlices(u8, &original, filtered[1..]);
+}
+
+test "filterRow Average roundtrip" {
+    const prev = [_]u8{ 0, 10, 20, 30 }; // With filter byte
+    const original = [_]u8{ 10, 20, 30 };
+    var filtered: [4]u8 = undefined;
+    filterRow(.average, &original, prev[1..], &filtered, 1);
+
+    try unfilterRow(&filtered, &prev, 1);
+    try std.testing.expectEqualSlices(u8, &original, filtered[1..]);
+}
+
+test "filterRow Paeth roundtrip" {
+    const prev = [_]u8{ 0, 10, 20, 30 }; // With filter byte
+    const original = [_]u8{ 15, 25, 35 };
+    var filtered: [4]u8 = undefined;
+    filterRow(.paeth, &original, prev[1..], &filtered, 1);
+
+    try unfilterRow(&filtered, &prev, 1);
+    try std.testing.expectEqualSlices(u8, &original, filtered[1..]);
+}
+
+test "filterRow wraparound" {
+    // Test that wrapping subtraction works correctly
+    const src = [_]u8{ 200, 44 }; // 44 - 200 = -156 = 100 (mod 256)
+    var dst: [3]u8 = undefined;
+    filterRow(.sub, &src, null, &dst, 1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 200, 100 }, &dst);
+}
+
+test "selectBestFilter basic" {
+    // Constant data should prefer None or Up
+    const constant = [_]u8{ 100, 100, 100, 100 };
+    var scratch: [4]u8 = undefined;
+    const filter = selectBestFilter(&constant, null, 1, &scratch);
+    // For constant data with no prev, None gives sum = 4*100 = 400
+    // Sub gives: 100, 0, 0, 0 -> sum = 100
+    // So Sub should win
+    try std.testing.expectEqual(FilterType.sub, filter);
+}
+
+test "selectBestFilter gradient" {
+    // Smooth gradient should prefer Sub
+    const gradient = [_]u8{ 10, 20, 30, 40, 50 };
+    var scratch: [5]u8 = undefined;
+    const filter = selectBestFilter(&gradient, null, 1, &scratch);
+    // Sub gives constant differences: 10, 10, 10, 10, 10
+    try std.testing.expectEqual(FilterType.sub, filter);
+}
+
+test "sumOfAbsolutes" {
+    // 0 = 0, 1 = 1, 127 = 127, 128 = -128, 255 = -1
+    const data = [_]u8{ 0, 1, 127, 128, 255 };
+    const sum = sumOfAbsolutes(&data);
+    // |0| + |1| + |127| + |-128| + |-1| = 0 + 1 + 127 + 128 + 1 = 257
+    try std.testing.expectEqual(@as(u64, 257), sum);
 }

@@ -323,3 +323,59 @@ test "parsePlte invalid length" {
     // Empty is invalid
     try std.testing.expectError(error.InvalidLength, parsePlte(&[_]u8{}));
 }
+
+/// Serialize a palette to PLTE chunk data.
+/// Returns a slice of the provided buffer containing the serialized palette.
+pub fn serializePlte(palette: []const PaletteEntry, buffer: []u8) error{BufferTooSmall}![]u8 {
+    const required_size = palette.len * 3;
+    if (buffer.len < required_size) {
+        return error.BufferTooSmall;
+    }
+
+    var pos: usize = 0;
+    for (palette) |entry| {
+        buffer[pos] = entry.r;
+        buffer[pos + 1] = entry.g;
+        buffer[pos + 2] = entry.b;
+        pos += 3;
+    }
+
+    return buffer[0..pos];
+}
+
+test "serializePlte" {
+    const palette = [_]PaletteEntry{
+        .{ .r = 255, .g = 0, .b = 0 },
+        .{ .r = 0, .g = 255, .b = 0 },
+        .{ .r = 0, .g = 0, .b = 255 },
+    };
+    var buffer: [9]u8 = undefined;
+
+    const result = try serializePlte(&palette, &buffer);
+    try std.testing.expectEqual(@as(usize, 9), result.len);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 0, 255, 0, 0, 0, 255 }, result);
+}
+
+test "serializePlte roundtrip" {
+    const original = [_]PaletteEntry{
+        .{ .r = 128, .g = 64, .b = 32 },
+        .{ .r = 16, .g = 8, .b = 4 },
+    };
+    var buffer: [6]u8 = undefined;
+
+    const serialized = try serializePlte(&original, &buffer);
+    const parsed = try parsePlte(serialized);
+
+    try std.testing.expectEqual(@as(usize, 2), parsed.len);
+    try std.testing.expectEqual(original[0].r, parsed[0].r);
+    try std.testing.expectEqual(original[1].b, parsed[1].b);
+}
+
+test "serializePlte buffer too small" {
+    const palette = [_]PaletteEntry{
+        .{ .r = 255, .g = 0, .b = 0 },
+    };
+    var buffer: [2]u8 = undefined;
+
+    try std.testing.expectError(error.BufferTooSmall, serializePlte(&palette, &buffer));
+}

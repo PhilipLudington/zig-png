@@ -228,42 +228,42 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ---
 
-## Phase 6: Encoding
+## Phase 6: Encoding ✅
 
-### 6.1 Filter Selection
-- [ ] Extend `src/filters.zig`
-- [ ] Implement `applyFilterNone(src, dst)`
-- [ ] Implement `applyFilterSub(src, dst, bpp)`
-- [ ] Implement `applyFilterUp(src, prev, dst)`
-- [ ] Implement `applyFilterAverage(src, prev, dst, bpp)`
-- [ ] Implement `applyFilterPaeth(src, prev, dst, bpp)`
-- [ ] Implement `selectFilter(row, prev, bpp, strategy) FilterType`
-- [ ] Implement sum-of-absolutes heuristic for adaptive selection
-- [ ] Add unit tests
+### 6.1 Filter Selection ✅
+- [x] Extend `src/filters.zig`
+- [x] Implement `filterNone(src, dst)`
+- [x] Implement `filterSub(src, dst, bpp)`
+- [x] Implement `filterUp(src, prev, dst)`
+- [x] Implement `filterAverage(src, prev, dst, bpp)`
+- [x] Implement `filterPaeth(src, prev, dst, bpp)`
+- [x] Implement `filterRow(filter, src, prev, dst, bpp)` dispatcher
+- [x] Implement `selectBestFilter(row, prev, bpp, scratch)` with sum-of-absolutes heuristic
+- [x] Add `FilterStrategy` enum (none, sub, up, average, paeth, adaptive)
+- [x] Add unit tests
 
-### 6.2 Chunk Writing
-- [ ] Extend `src/chunks/critical.zig`
-- [ ] Implement `writeIhdr(writer, header)`
-- [ ] Implement `writePlte(writer, palette)`
-- [ ] Implement `writeIdat(writer, data)`
-- [ ] Implement `writeIend(writer)`
-- [ ] All write functions compute and append CRC
+### 6.2 Chunk Writing ✅
+- [x] Use existing `writeChunk()` in `src/chunks/chunks.zig`
+- [x] Use existing `Header.serialize()` in `src/chunks/critical.zig`
+- [x] Implement `serializePlte(palette, buffer)` in `src/chunks/critical.zig`
+- [x] All write functions compute and append CRC via writeChunk
 
-### 6.3 Encoder Core
-- [ ] Create `src/encoder.zig`
-- [ ] Define `EncodeOptions` struct (compression_level, filter_strategy, etc.)
-- [ ] Write PNG signature
-- [ ] Write IHDR chunk
-- [ ] Write PLTE chunk if indexed
-- [ ] Filter and compress pixel data
-- [ ] Write IDAT chunk(s)
-- [ ] Write IEND chunk
+### 6.3 Encoder Core ✅
+- [x] Create `src/encoder.zig`
+- [x] Define `EncodeOptions` struct (compression_level, filter_strategy)
+- [x] Write PNG signature
+- [x] Write IHDR chunk
+- [x] Write PLTE chunk if indexed
+- [x] Filter and compress pixel data (non-interlaced and interlaced)
+- [x] Write IDAT chunk(s) with 32KB splitting
+- [x] Write IEND chunk
 
-### 6.4 Simple Encode API
-- [ ] Implement `png.encode(image, writer) !void`
-- [ ] Implement `png.encodeBuffer(allocator, image) ![]u8`
-- [ ] Implement `png.encodeFile(image, path) !void`
-- [ ] Add round-trip tests (decode -> encode -> decode)
+### 6.4 Simple Encode API ✅
+- [x] Implement `png.encode(allocator, image, output, options) !usize`
+- [x] Implement `png.encodeRaw(allocator, header, pixels, palette, output, options) !usize`
+- [x] Implement `png.encodeFile(allocator, image, path, options) !void`
+- [x] Implement `png.maxEncodedSize(header) usize`
+- [x] Add round-trip tests (decode -> encode -> decode)
 
 ---
 
@@ -359,8 +359,9 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - Phase 3: Basic Decoding ✅ (all bit depths and color types supported)
 - Phase 4: Adam7 Interlacing ✅
 - Phase 5: Compression (Deflate) ✅ (stored and fixed Huffman blocks)
+- Phase 6: Encoding ✅ (full PNG encoder with filtering and compression)
 
-**Next Task:** Phase 6 - Encoding (PNG encoder using the new compression)
+**Next Task:** Phase 7 - Streaming API (optional, for incremental processing)
 
 ---
 
