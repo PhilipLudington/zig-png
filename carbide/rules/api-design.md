@@ -83,26 +83,30 @@ pub fn divide(a: i32, b: i32) Result
 - Use for complex object construction
 - Return `*Self` from setters for chaining
 
-## A7: Writer/Reader Pattern (Zig 0.15+)
-- Use new `std.Io.Reader` and `std.Io.Writer` concrete types
-- Old generic `anytype` pattern is deprecated
-- Always use explicit buffering and flush
+## A7: File I/O Pattern (Zig 0.15+)
+- File.Writer does NOT have `.print()` method
+- Use `std.fmt.bufPrint()` + `file.writeAll()` for formatted output
+- For simple writes, use `file.writeAll()` directly
 
 ```zig
-// GOOD (Zig 0.15+): Concrete types with explicit buffering
-pub fn writeData(writer: std.Io.Writer, data: []const u8) !void {
-    try writer.writeAll(data);
-    // Don't forget to flush when needed!
-}
+// GOOD (Zig 0.15+): Format to buffer, then write
+var buf: [256]u8 = undefined;
+const formatted = std.fmt.bufPrint(&buf, "Value: {d}\n", .{value}) catch unreachable;
+try file.writeAll(formatted);
 
-// For stdout with buffering
-var buffer: [4096]u8 = undefined;
+// GOOD: Simple writes
+try file.writeAll("Hello, world!\n");
+try file.writeAll(data_slice);
+
+// BAD: File.Writer has no .print() method
+const writer = file.writer();
+try writer.print("Hello {s}\n", .{name});  // Compile error!
+
+// For stdout/stderr, same pattern applies
 const stdout = std.io.getStdOut();
-var writer = stdout.writer(&buffer);
-try writer.print("Hello {s}\n", .{name});
-try writer.flush();
-
-// Legacy compatibility: use adaptToNewApi() for old streams
+var buf: [256]u8 = undefined;
+const msg = std.fmt.bufPrint(&buf, "Result: {d}\n", .{result}) catch unreachable;
+try stdout.writeAll(msg);
 ```
 
 ## A8: Removed Features (Zig 0.15+)

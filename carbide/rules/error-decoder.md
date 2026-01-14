@@ -300,6 +300,58 @@ error: expected type '[]const u8', found 'usize'
 // Check struct definition for expected types
 ```
 
+## ArrayList Errors (Zig 0.15+)
+
+### E021: ArrayList.init() Does Not Exist
+```
+error: no field or member function named 'init' in 'std.ArrayListUnmanaged(u8)'
+```
+**Cause**: Zig 0.15 removed `.init(allocator)` from ArrayListUnmanaged.
+**Fix**: Use zero-initialization instead:
+```zig
+// BAD (Zig 0.15+)
+var list = std.ArrayListUnmanaged(u8).init(allocator);
+
+// GOOD - zero-initialize
+var list = std.ArrayListUnmanaged(u8){};
+defer list.deinit(allocator);
+```
+
+### E022: ArrayList Method Missing Allocator
+```
+error: expected 2 arguments, found 1
+```
+**Cause**: ArrayListUnmanaged methods require allocator parameter in 0.15+.
+**Fix**: Pass allocator to each method call:
+```zig
+// BAD (Zig 0.15+)
+try list.append(value);
+list.deinit();
+const slice = try list.toOwnedSlice();
+
+// GOOD - pass allocator to each method
+try list.append(allocator, value);
+list.deinit(allocator);
+const slice = try list.toOwnedSlice(allocator);
+```
+
+### E023: File.Writer Has No print()
+```
+error: no field or member function named 'print' in 'std.fs.File.Writer'
+```
+**Cause**: File.Writer doesn't have a `.print()` method in Zig 0.15+.
+**Fix**: Use `std.fmt.bufPrint()` + `writeAll()`:
+```zig
+// BAD (Zig 0.15+)
+const writer = file.writer();
+try writer.print("Value: {d}\n", .{value});
+
+// GOOD - format to buffer, then write
+var buf: [256]u8 = undefined;
+const formatted = std.fmt.bufPrint(&buf, "Value: {d}\n", .{value}) catch unreachable;
+try file.writeAll(formatted);
+```
+
 ## Build System Errors
 
 ### E019: root_source_file Deprecated (Zig 0.15+)
@@ -346,3 +398,6 @@ exe.root_module.addImport("foo", mod);
 | `unable to evaluate constant` | Non-comptime in comptime context | Add `comptime` keyword |
 | `error is discarded` | Unhandled error | `try`, `catch`, or explicit discard |
 | `deprecated option` (0.15+) | Old build API | Use `root_module` pattern |
+| `no member 'init'` in ArrayList (0.15+) | Old ArrayList API | Use `{}` zero-init |
+| `expected 2 arguments, found 1` (ArrayList) | Missing allocator param | Pass allocator to methods |
+| `no member 'print'` in File.Writer | Writer has no print | `std.fmt.bufPrint` + `writeAll` |
