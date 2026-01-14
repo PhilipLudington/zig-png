@@ -153,10 +153,11 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - [x] Store palette in Image
 - [ ] Expand indexed pixels to RGB on demand
 
-### 3.5 Simple Decode API (Partial ✅)
+### 3.5 Simple Decode API ✅
 - [x] Implement `decoder.decode(allocator, buffer) !Image`
 - [x] Implement `decoder.decodeFile(allocator, path) !Image`
-- [ ] Wire up to `png.decode()` public API
+- [x] Wire up to `png.decode()` public API
+- [x] Re-export public types (Image, Header, ColorType, BitDepth, etc.)
 - [ ] Add integration tests with real PNG files
 
 ### 3.6 Test Images
