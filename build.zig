@@ -67,4 +67,27 @@ pub fn build(b: *std.Build) void {
 
     const validate_step = b.step("validate", "Run PNG validation tool");
     validate_step.dependOn(&run_validate.step);
+
+    // PngSuite conformance test executable
+    const pngsuite_exe = b.addExecutable(.{
+        .name = "pngsuite",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/pngsuite.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "png", .module = png_mod },
+            },
+        }),
+    });
+    b.installArtifact(pngsuite_exe);
+
+    const run_pngsuite = b.addRunArtifact(pngsuite_exe);
+    run_pngsuite.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_pngsuite.addArgs(args);
+    }
+
+    const pngsuite_step = b.step("pngsuite", "Run PngSuite conformance tests");
+    pngsuite_step.dependOn(&run_pngsuite.step);
 }

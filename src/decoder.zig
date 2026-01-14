@@ -111,6 +111,11 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     var found_iend = false;
 
     while (try iter.next()) |chunk| {
+        // Verify CRC for all chunks
+        if (!chunk.verifyCrc()) {
+            return error.InvalidChunk;
+        }
+
         if (std.mem.eql(u8, &chunk.chunk_type, &chunks.chunk_types.IDAT)) {
             try idat_data.appendSlice(allocator, chunk.data);
         } else if (std.mem.eql(u8, &chunk.chunk_type, &chunks.chunk_types.PLTE)) {
