@@ -231,7 +231,9 @@ pub const HashChain = struct {
             // Check distance is valid
             if (distance > 0 and distance <= max_distance) {
                 // Compare strings to find match length
-                const max_len = @min(max_match_length, @as(u16, @intCast(data.len - pos)));
+                // Note: compute min in usize first to avoid overflow when data.len - pos > 65535
+                const remaining = data.len - pos;
+                const max_len: u16 = @intCast(@min(@as(usize, max_match_length), remaining));
                 var length: u16 = 0;
 
                 while (length < max_len and
