@@ -41,6 +41,8 @@ pub const PixelAccessError = error{
     XOutOfBounds,
     /// The requested y coordinate is out of bounds.
     YOutOfBounds,
+    /// The pixel buffer is smaller than expected for the given coordinates.
+    BufferOutOfBounds,
 };
 
 /// Decoded PNG image.
@@ -85,6 +87,9 @@ pub const Image = struct {
         const bytes_per_row = color.bytesPerRowUnchecked(self.header.width, self.header.color_type, self.header.bit_depth);
         const row_start = y * bytes_per_row;
         const pixel_start = row_start + x * bpp;
+        if (pixel_start + bpp > self.pixels.len) {
+            return error.BufferOutOfBounds;
+        }
         return self.pixels[pixel_start..][0..bpp];
     }
 
@@ -97,6 +102,9 @@ pub const Image = struct {
         // Use unchecked version since dimensions are validated at decode time
         const bytes_per_row = color.bytesPerRowUnchecked(self.header.width, self.header.color_type, self.header.bit_depth);
         const start = y * bytes_per_row;
+        if (start + bytes_per_row > self.pixels.len) {
+            return error.BufferOutOfBounds;
+        }
         return self.pixels[start..][0..bytes_per_row];
     }
 
