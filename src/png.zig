@@ -87,7 +87,7 @@ pub fn encodeFile(
 }
 
 /// Calculate the maximum buffer size needed to encode a PNG.
-pub fn maxEncodedSize(header: Header) usize {
+pub fn maxEncodedSize(header: Header) EncodeError!usize {
     return encoder.maxEncodedSize(header);
 }
 
@@ -259,4 +259,26 @@ test "png.encodeRaw creates valid PNG" {
     try std.testing.expectEqual(@as(u32, 4), image.width());
     try std.testing.expectEqual(@as(u32, 4), image.height());
     try std.testing.expectEqualSlices(u8, &pixels, image.pixels);
+}
+
+test "png.maxEncodedSize returns reasonable size" {
+    const header = Header{
+        .width = 100,
+        .height = 100,
+        .bit_depth = .@"8",
+        .color_type = .rgba,
+        .compression_method = .deflate,
+        .filter_method = .adaptive,
+        .interlace_method = .none,
+    };
+
+    // Call through public API - this tests the wrapper function
+    const max_size = try maxEncodedSize(header);
+
+    // Should be larger than raw pixel data (100x100x4 = 40000 bytes)
+    const raw_size = 100 * 100 * 4;
+    try std.testing.expect(max_size > raw_size);
+
+    // Should be reasonable (not absurdly large)
+    try std.testing.expect(max_size < raw_size * 3);
 }
