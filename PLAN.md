@@ -115,7 +115,7 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 
 ---
 
-## Phase 3: Basic Decoding (Partial ✅)
+## Phase 3: Basic Decoding ✅
 
 ### 3.1 Filter Reconstruction ✅
 - [x] Create `src/filters.zig`
@@ -134,7 +134,7 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - [x] Implement `Image.deinit()`
 - [x] Implement `Image.getPixel(x, y) []u8`
 - [x] Implement `Image.getRow(y) []u8`
-- [ ] Define `Pixel` union type (deferred)
+- [ ] Define `Pixel` union type (deferred - not needed for core functionality)
 
 ### 3.3 Decoder Core ✅
 - [x] Create `src/decoder.zig`
@@ -144,28 +144,27 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 - [x] Decompress IDAT data
 - [x] Unfilter each row
 - [x] Store pixels in Image struct
-- [ ] Handle all bit depths (1, 2, 4, 8, 16) - 8-bit working
-- [ ] Handle all color types - grayscale working
+- [x] Handle all bit depths (1, 2, 4, 8, 16)
+- [x] Handle all color types (grayscale, RGB, indexed, grayscale+alpha, RGBA)
 
 ### 3.4 Palette Handling ✅
 - [x] Parse PLTE chunk (in `critical.zig`)
 - [x] Validate palette size (1-256 entries, divisible by 3)
 - [x] Store palette in Image
-- [ ] Expand indexed pixels to RGB on demand
+- [ ] Expand indexed pixels to RGB on demand (deferred - optional convenience)
 
 ### 3.5 Simple Decode API ✅
 - [x] Implement `decoder.decode(allocator, buffer) !Image`
 - [x] Implement `decoder.decodeFile(allocator, path) !Image`
 - [x] Wire up to `png.decode()` public API
 - [x] Re-export public types (Image, Header, ColorType, BitDepth, etc.)
-- [ ] Add integration tests with real PNG files
+- [x] Add decode tests for all bit depths (1, 2, 4, 8, 16)
+- [x] Add decode tests for all color types
 
 ### 3.6 Test Images
 - [ ] Create `src/testing/` directory
 - [ ] Download PngSuite test images
-- [ ] Add decode tests for basic images (basn*.png)
-- [ ] Add decode tests for different bit depths
-- [ ] Add decode tests for different color types
+- [ ] Add integration tests with real PNG files
 
 ---
 
@@ -358,10 +357,10 @@ This plan breaks down the implementation into concrete, actionable tasks based o
 **Completed:**
 - Phase 1: Foundation ✅
 - Phase 2: Decompression (Inflate) ✅
-- Phase 3: Basic Decoding (core functionality) ✅
+- Phase 3: Basic Decoding ✅ (all bit depths and color types supported)
 - Phase 4: Adam7 Interlacing ✅
 
-**Next Task:** Phase 3.6 - Test Images / Phase 5 - Compression (Deflate)
+**Next Task:** Phase 3.6 - Test Images with PngSuite / Phase 5 - Compression (Deflate)
 
 ---
 
