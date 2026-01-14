@@ -5,3 +5,7 @@ zig-out/
 # Validation test artifacts
 test_output/
 test_compare/
+
+# Fuzz corpus and output (generated during fuzzing)
+fuzz_corpus/
+fuzz_output/

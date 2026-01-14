@@ -90,4 +90,41 @@ pub fn build(b: *std.Build) void {
 
     const pngsuite_step = b.step("pngsuite", "Run PngSuite conformance tests");
     pngsuite_step.dependOn(&run_pngsuite.step);
+
+    // Fuzz testing
+    // To run fuzz tests: zig build fuzz --fuzz
+    // Without --fuzz flag, runs the fuzz functions once as regular tests
+    const fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const fuzz_tests = b.addTest(.{
+        .root_module = fuzz_mod,
+    });
+
+    const run_fuzz = b.addRunArtifact(fuzz_tests);
+
+    const fuzz_step = b.step("fuzz", "Run fuzz tests (add --fuzz for continuous fuzzing)");
+    fuzz_step.dependOn(&run_fuzz.step);
+
+    // AFL++ harness for external fuzzing
+    // Build with: zig build afl-harness
+    // Run with: afl-fuzz -i fuzz_corpus -o fuzz_output -- ./zig-out/bin/afl-harness
+    const afl_harness = b.addExecutable(.{
+        .name = "afl-harness",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/afl_harness.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe, // ReleaseSafe for safety checks during fuzzing
+            .imports = &.{
+                .{ .name = "png", .module = png_mod },
+            },
+        }),
+    });
+    b.installArtifact(afl_harness);
+
+    const afl_step = b.step("afl-harness", "Build AFL++ fuzz harness");
+    afl_step.dependOn(&afl_harness.step);
 }
