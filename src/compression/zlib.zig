@@ -1,11 +1,13 @@
-//! Zlib decompression wrapper (RFC 1950).
+//! Zlib compression and decompression (RFC 1950).
 //!
 //! Wraps DEFLATE with zlib header and Adler32 checksum.
 //! This is the compression format used by PNG for image data.
 
 const std = @import("std");
-const adler32 = @import("../utils/adler32.zig");
+const adler32_mod = @import("../utils/adler32.zig");
 const inflate_mod = @import("inflate.zig");
+const deflate_mod = @import("deflate.zig");
+const BitWriter = @import("../utils/bit_writer.zig").BitWriter;
 
 /// Zlib decompression errors.
 pub const ZlibError = error{
@@ -101,7 +103,7 @@ pub fn decompress(input: []const u8, output: []u8) ZlibError!usize {
     const decompressed_len = try inflate_mod.inflate(deflate_data, output);
 
     // Calculate Adler32 of decompressed data
-    const computed_checksum = adler32.adler32(output[0..decompressed_len]);
+    const computed_checksum = adler32_mod.adler32(output[0..decompressed_len]);
 
     // Read stored Adler32 from end of input (big-endian)
     if (input.len < 4) {
@@ -115,6 +117,83 @@ pub fn decompress(input: []const u8, output: []u8) ZlibError!usize {
     }
 
     return decompressed_len;
+}
+
+// ============================================================================
+// Zlib Compression
+// ============================================================================
+
+/// Zlib compression errors.
+pub const ZlibCompressError = error{
+    BufferOverflow,
+} || deflate_mod.DeflateError;
+
+/// Compression level for zlib.
+pub const CompressionLevel = deflate_mod.CompressionLevel;
+
+/// Generate zlib header bytes.
+///
+/// Returns CMF and FLG bytes with valid checksum.
+pub fn generateHeader(level: CompressionLevel) [2]u8 {
+    // CMF: CM=8 (deflate), CINFO=7 (32KB window)
+    const cmf: u8 = 0x78;
+
+    // FLG: FCHECK + FLEVEL
+    // FDICT = 0 (no dictionary)
+    // FLEVEL based on compression level
+    const flevel: u8 = switch (level) {
+        .store, .fastest => 0, // Fastest
+        .fast => 1, // Fast
+        .default => 2, // Default
+        .best => 3, // Maximum
+    };
+
+    // Calculate FCHECK so (CMF * 256 + FLG) % 31 == 0
+    var flg: u8 = (flevel << 6);
+    const base: u16 = @as(u16, cmf) * 256 + flg;
+    const fcheck: u8 = @intCast((31 - (base % 31)) % 31);
+    flg |= fcheck;
+
+    return .{ cmf, flg };
+}
+
+/// Compress data using zlib format.
+///
+/// Writes zlib header, deflate-compressed data, and Adler32 checksum.
+/// Returns the number of bytes written to output.
+pub fn compress(
+    input: []const u8,
+    output: []u8,
+    level: CompressionLevel,
+) ZlibCompressError!usize {
+    if (output.len < 6) {
+        return error.BufferOverflow;
+    }
+
+    var pos: usize = 0;
+
+    // Write zlib header
+    const header = generateHeader(level);
+    output[pos] = header[0];
+    output[pos + 1] = header[1];
+    pos += 2;
+
+    // Compress data using deflate
+    var writer = BitWriter.init(output[pos..]);
+    var compressor = deflate_mod.Deflate.init(&writer, level);
+    try compressor.compress(input);
+    try writer.flush();
+    pos += writer.bytesWritten();
+
+    // Calculate and write Adler32 checksum (big-endian)
+    const checksum = adler32_mod.adler32(input);
+    if (pos + 4 > output.len) {
+        return error.BufferOverflow;
+    }
+    std.mem.writeInt(u32, output[pos..][0..4], checksum, .big);
+    pos += 4;
+
+    return pos;
 }
 
 // Tests
@@ -184,4 +263,91 @@ test "decompress checksum mismatch" {
 
     var output: [32]u8 = undefined;
     try std.testing.expectError(error.ChecksumMismatch, decompress(&input, &output));
+}
+
+// Compression tests
+
+test "generateHeader produces valid header" {
+    const levels = [_]CompressionLevel{ .store, .fastest, .fast, .default, .best };
+    for (levels) |level| {
+        const header = generateHeader(level);
+        // Verify checksum: (CMF * 256 + FLG) % 31 == 0
+        const check: u16 = @as(u16, header[0]) * 256 + header[1];
+        try std.testing.expectEqual(@as(u16, 0), check % 31);
+        // Verify deflate method
+        try std.testing.expectEqual(@as(u8, 8), header[0] & 0x0F);
+    }
+}
+
+test "compress empty data" {
+    var output: [32]u8 = undefined;
+    const len = try compress("", &output, .default);
+
+    // Should have header (2) + deflate (small) + checksum (4)
+    try std.testing.expect(len >= 6);
+    try std.testing.expect(len <= 16);
+
+    // Verify we can decompress it
+    var decompressed: [32]u8 = undefined;
+    const dec_len = try decompress(output[0..len], &decompressed);
+    try std.testing.expectEqual(@as(usize, 0), dec_len);
+}
+
+test "compress hello world" {
+    const input = "hello world";
+    var output: [64]u8 = undefined;
+    const len = try compress(input, &output, .default);
+
+    // Verify we can decompress it
+    var decompressed: [64]u8 = undefined;
+    const dec_len = try decompress(output[0..len], &decompressed);
+    try std.testing.expectEqual(@as(usize, 11), dec_len);
+    try std.testing.expectEqualSlices(u8, input, decompressed[0..dec_len]);
+}
+
+test "compress round-trip all levels" {
+    const input = "the quick brown fox jumps over the lazy dog";
+    const levels = [_]CompressionLevel{ .store, .fastest, .fast, .default, .best };
+
+    for (levels) |level| {
+        var output: [128]u8 = undefined;
+        const len = try compress(input, &output, level);
+
+        var decompressed: [128]u8 = undefined;
+        const dec_len = try decompress(output[0..len], &decompressed);
+        try std.testing.expectEqual(@as(usize, input.len), dec_len);
+        try std.testing.expectEqualSlices(u8, input, decompressed[0..dec_len]);
+    }
+}
+
+test "compress repetitive data compresses well" {
+    const input = "abcabcabcabcabcabcabcabcabcabcabcabc"; // 36 bytes
+    var output: [64]u8 = undefined;
+    const len = try compress(input, &output, .default);
+
+    // Should compress significantly
+    try std.testing.expect(len < input.len);
+
+    // Verify round-trip
+    var decompressed: [64]u8 = undefined;
+    const dec_len = try decompress(output[0..len], &decompressed);
+    try std.testing.expectEqualSlices(u8, input, decompressed[0..dec_len]);
+}
+
+test "compress larger data" {
+    // Generate test data with patterns
+    var input: [512]u8 = undefined;
+    for (&input, 0..) |*b, i| {
+        b.* = @intCast((i * 7 + 13) % 256);
+    }
+    // Add repetition
+    @memcpy(input[256..384], input[0..128]);
+
+    var output: [1024]u8 = undefined;
+    const len = try compress(&input, &output, .default);
+
+    var decompressed: [512]u8 = undefined;
+    const dec_len = try decompress(output[0..len], &decompressed);
+    try std.testing.expectEqual(@as(usize, 512), dec_len);
+    try std.testing.expectEqualSlices(u8, &input, decompressed[0..dec_len]);
 }
