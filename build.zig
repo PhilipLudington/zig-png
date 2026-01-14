@@ -127,4 +127,70 @@ pub fn build(b: *std.Build) void {
 
     const afl_step = b.step("afl-harness", "Build AFL++ fuzz harness");
     afl_step.dependOn(&afl_harness.step);
+
+    // Cross-validation tool (compares against libpng/ImageMagick)
+    const cross_validate_exe = b.addExecutable(.{
+        .name = "cross-validate",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/cross_validate.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "png", .module = png_mod },
+            },
+        }),
+    });
+    b.installArtifact(cross_validate_exe);
+
+    const run_cross_validate = b.addRunArtifact(cross_validate_exe);
+    run_cross_validate.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cross_validate.addArgs(args);
+    }
+
+    const cross_validate_step = b.step("cross-validate", "Cross-validate against reference PNG implementations");
+    cross_validate_step.dependOn(&run_cross_validate.step);
+
+    // Malformed PNG generator for fuzz testing
+    const gen_malformed_exe = b.addExecutable(.{
+        .name = "gen-malformed",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/gen_malformed.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(gen_malformed_exe);
+
+    const run_gen_malformed = b.addRunArtifact(gen_malformed_exe);
+    run_gen_malformed.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_gen_malformed.addArgs(args);
+    }
+
+    const gen_malformed_step = b.step("gen-malformed", "Generate malformed PNG files for fuzz testing");
+    gen_malformed_step.dependOn(&run_gen_malformed.step);
+
+    // Real-world image testing tool
+    const realworld_test_exe = b.addExecutable(.{
+        .name = "realworld-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/realworld_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "png", .module = png_mod },
+            },
+        }),
+    });
+    b.installArtifact(realworld_test_exe);
+
+    const run_realworld_test = b.addRunArtifact(realworld_test_exe);
+    run_realworld_test.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_realworld_test.addArgs(args);
+    }
+
+    const realworld_test_step = b.step("realworld-test", "Test decoder with real-world PNG images from the web");
+    realworld_test_step.dependOn(&run_realworld_test.step);
 }
