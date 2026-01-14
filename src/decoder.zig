@@ -27,7 +27,21 @@ pub const DecodeError = error{
     UnexpectedChunk,
     InvalidChunk,
     PrematureEnd,
+    IdatTooLarge,
+    SizeOverflow,
 } || chunks.ChunkError || critical.HeaderError || zlib.ZlibError || filters.FilterError;
+
+/// Maximum size for accumulated IDAT data (256MB).
+/// Prevents memory exhaustion from malicious files with huge IDAT chunks.
+pub const max_idat_size: usize = 256 * 1024 * 1024;
+
+/// Errors that can occur when accessing image pixels.
+pub const PixelAccessError = error{
+    /// The requested x coordinate is out of bounds.
+    XOutOfBounds,
+    /// The requested y coordinate is out of bounds.
+    YOutOfBounds,
+};
 
 /// Decoded PNG image.
 pub const Image = struct {
@@ -39,7 +53,8 @@ pub const Image = struct {
     pixels: []u8,
 
     /// Optional palette (for indexed color images).
-    palette: ?[]const critical.PaletteEntry,
+    /// This is owned memory that must be freed with deinit().
+    palette: ?[]critical.PaletteEntry,
 
     /// The allocator used for this image's memory.
     allocator: Allocator,
@@ -48,22 +63,39 @@ pub const Image = struct {
 
     /// Free the image's allocated memory.
     pub fn deinit(self: *Self) void {
+        if (self.palette) |pal| {
+            self.allocator.free(pal);
+        }
         self.allocator.free(self.pixels);
         self.* = undefined;
     }
 
     /// Get a pixel value at the given coordinates.
     /// Returns raw bytes for that pixel (1-8 bytes depending on format).
-    pub fn getPixel(self: *const Self, x: u32, y: u32) []const u8 {
+    /// Returns error if coordinates are out of bounds.
+    pub fn getPixel(self: *const Self, x: u32, y: u32) PixelAccessError![]const u8 {
+        if (x >= self.header.width) {
+            return error.XOutOfBounds;
+        }
+        if (y >= self.header.height) {
+            return error.YOutOfBounds;
+        }
         const bpp = self.header.bytesPerPixel();
-        const row_start = y * self.header.bytesPerRow();
+        // Use unchecked version since dimensions are validated at decode time
+        const bytes_per_row = color.bytesPerRowUnchecked(self.header.width, self.header.color_type, self.header.bit_depth);
+        const row_start = y * bytes_per_row;
         const pixel_start = row_start + x * bpp;
         return self.pixels[pixel_start..][0..bpp];
     }
 
     /// Get a full row of pixel data.
-    pub fn getRow(self: *const Self, y: u32) []const u8 {
-        const bytes_per_row = self.header.bytesPerRow();
+    /// Returns error if y coordinate is out of bounds.
+    pub fn getRow(self: *const Self, y: u32) PixelAccessError![]const u8 {
+        if (y >= self.header.height) {
+            return error.YOutOfBounds;
+        }
+        // Use unchecked version since dimensions are validated at decode time
+        const bytes_per_row = color.bytesPerRowUnchecked(self.header.width, self.header.color_type, self.header.bit_depth);
         const start = y * bytes_per_row;
         return self.pixels[start..][0..bytes_per_row];
     }
@@ -107,7 +139,9 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     var idat_data = std.ArrayListUnmanaged(u8){};
     defer idat_data.deinit(allocator);
 
-    var palette: ?[]const critical.PaletteEntry = null;
+    var palette: ?[]critical.PaletteEntry = null;
+    errdefer if (palette) |pal| allocator.free(pal);
+
     var found_iend = false;
 
     while (try iter.next()) |chunk| {
@@ -117,9 +151,19 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
         }
 
         if (std.mem.eql(u8, &chunk.chunk_type, &chunks.chunk_types.IDAT)) {
+            // Check IDAT size limit before appending
+            if (idat_data.items.len + chunk.data.len > max_idat_size) {
+                return error.IdatTooLarge;
+            }
             try idat_data.appendSlice(allocator, chunk.data);
         } else if (std.mem.eql(u8, &chunk.chunk_type, &chunks.chunk_types.PLTE)) {
-            palette = critical.parsePlte(chunk.data) catch null;
+            // Parse and copy palette to owned memory
+            const parsed_pal = critical.parsePlte(chunk.data) catch null;
+            if (parsed_pal) |pal| {
+                const owned_pal = try allocator.alloc(critical.PaletteEntry, pal.len);
+                @memcpy(owned_pal, pal);
+                palette = owned_pal;
+            }
         } else if (std.mem.eql(u8, &chunk.chunk_type, &chunks.chunk_types.IEND)) {
             found_iend = true;
             break;
@@ -136,7 +180,7 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     }
 
     // Allocate final pixel buffer
-    const pixel_row_bytes = header.bytesPerRow();
+    const pixel_row_bytes = header.bytesPerRow() catch return error.SizeOverflow;
     const pixels = try allocator.alloc(u8, pixel_row_bytes * header.height);
     errdefer allocator.free(pixels);
 
@@ -162,7 +206,7 @@ fn decodeNonInterlaced(
     pixels: []u8,
 ) DecodeError!void {
     // Calculate required output size: all rows including filter bytes
-    const raw_size = header.rawDataSize();
+    const raw_size = header.rawDataSize() catch return error.SizeOverflow;
     var raw_data = try allocator.alloc(u8, raw_size);
     defer allocator.free(raw_data);
 
@@ -174,8 +218,8 @@ fn decodeNonInterlaced(
     }
 
     // Unfilter scanlines
-    const bytes_per_row_with_filter = header.bytesPerRowWithFilter();
-    const bytes_per_row = header.bytesPerRow();
+    const bytes_per_row_with_filter = header.bytesPerRowWithFilter() catch return error.SizeOverflow;
+    const bytes_per_row = header.bytesPerRow() catch return error.SizeOverflow;
     const bpp = header.bytesPerPixel();
 
     var prev_row: ?[]const u8 = null;
@@ -203,7 +247,7 @@ fn decodeInterlaced(
     pixels: []u8,
 ) DecodeError!void {
     // Calculate total raw size for all passes
-    const raw_size = Adam7.totalInterlacedBytes(header);
+    const raw_size = Adam7.totalInterlacedBytes(header) catch return error.SizeOverflow;
     var raw_data = try allocator.alloc(u8, raw_size);
     defer allocator.free(raw_data);
 
@@ -231,9 +275,9 @@ fn decodeInterlaced(
     for (0..interlace.pass_count) |p| {
         const pass: u3 = @intCast(p);
         const pass_h = Adam7.passHeight(pass, header.height);
-        const pass_raw_bytes = Adam7.passRawBytes(pass, header);
-        const pass_row_bytes = Adam7.passRowBytes(pass, header);
-        const pass_row_bytes_with_filter = Adam7.passRowBytesWithFilter(pass, header);
+        const pass_raw_bytes = Adam7.passRawBytes(pass, header) catch return error.SizeOverflow;
+        const pass_row_bytes = Adam7.passRowBytes(pass, header) catch return error.SizeOverflow;
+        const pass_row_bytes_with_filter = Adam7.passRowBytesWithFilter(pass, header) catch return error.SizeOverflow;
 
         if (pass_h == 0 or pass_raw_bytes == 0) {
             pass_pixels[p] = &[_]u8{};
@@ -304,10 +348,10 @@ test "decode 2x2 grayscale PNG" {
     try std.testing.expectEqual(color.BitDepth.@"8", image.header.bit_depth);
 
     // Check pixel values
-    try std.testing.expectEqual(@as(u8, 0x00), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x40), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x80), image.getPixel(0, 1)[0]);
-    try std.testing.expectEqual(@as(u8, 0xFF), image.getPixel(1, 1)[0]);
+    try std.testing.expectEqual(@as(u8, 0x00), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x40), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x80), (try image.getPixel(0, 1))[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), (try image.getPixel(1, 1))[0]);
 }
 
 test "decode rejects invalid signature" {
@@ -318,6 +362,54 @@ test "decode rejects invalid signature" {
 test "decode rejects truncated data" {
     // Just PNG signature, no chunks
     try std.testing.expectError(error.MissingIhdr, decode(std.testing.allocator, &png.signature));
+}
+
+test "getPixel returns error on out of bounds access" {
+    // A 2x2 grayscale PNG
+    const test_png = [_]u8{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57, 0xDD, 0x52,
+        0xF8, 0x00, 0x00, 0x00, 0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x60, 0x70, 0x60, 0x68,
+        0xF8, 0x0F, 0x00, 0x03, 0x05, 0x01, 0xC0, 0x53, 0x5B, 0x15, 0x9F, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+
+    var image = try decode(std.testing.allocator, &test_png);
+    defer image.deinit();
+
+    // Valid access should work
+    _ = try image.getPixel(0, 0);
+    _ = try image.getPixel(1, 1);
+
+    // X out of bounds (width is 2, so x=2 is out of bounds)
+    try std.testing.expectError(error.XOutOfBounds, image.getPixel(2, 0));
+    try std.testing.expectError(error.XOutOfBounds, image.getPixel(100, 0));
+
+    // Y out of bounds (height is 2, so y=2 is out of bounds)
+    try std.testing.expectError(error.YOutOfBounds, image.getPixel(0, 2));
+    try std.testing.expectError(error.YOutOfBounds, image.getPixel(0, 100));
+}
+
+test "getRow returns error on out of bounds access" {
+    // A 2x2 grayscale PNG
+    const test_png = [_]u8{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57, 0xDD, 0x52,
+        0xF8, 0x00, 0x00, 0x00, 0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x60, 0x70, 0x60, 0x68,
+        0xF8, 0x0F, 0x00, 0x03, 0x05, 0x01, 0xC0, 0x53, 0x5B, 0x15, 0x9F, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+
+    var image = try decode(std.testing.allocator, &test_png);
+    defer image.deinit();
+
+    // Valid access should work
+    _ = try image.getRow(0);
+    _ = try image.getRow(1);
+
+    // Y out of bounds (height is 2, so y=2 is out of bounds)
+    try std.testing.expectError(error.YOutOfBounds, image.getRow(2));
+    try std.testing.expectError(error.YOutOfBounds, image.getRow(100));
 }
 
 test "decode 2x2 RGB 8-bit PNG" {
@@ -340,13 +432,13 @@ test "decode 2x2 RGB 8-bit PNG" {
 
     // 3 bytes per pixel (RGB)
     // Pixel (0,0) = Red
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, image.getPixel(0, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, (try image.getPixel(0, 0)));
     // Pixel (1,0) = Green
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, (try image.getPixel(1, 0)));
     // Pixel (0,1) = Blue
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, image.getPixel(0, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = White
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, (try image.getPixel(1, 1)));
 }
 
 test "decode 2x2 RGBA 8-bit PNG" {
@@ -369,13 +461,13 @@ test "decode 2x2 RGBA 8-bit PNG" {
 
     // 4 bytes per pixel (RGBA)
     // Pixel (0,0) = Red opaque
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 255 }, image.getPixel(0, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 255 }, (try image.getPixel(0, 0)));
     // Pixel (1,0) = Green semi-transparent
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0, 128 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0, 128 }, (try image.getPixel(1, 0)));
     // Pixel (0,1) = Blue opaque
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255, 255 }, image.getPixel(0, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255, 255 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = Fully transparent
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0, 0 }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0, 0 }, (try image.getPixel(1, 1)));
 }
 
 test "decode 2x2 grayscale+alpha 8-bit PNG" {
@@ -398,13 +490,13 @@ test "decode 2x2 grayscale+alpha 8-bit PNG" {
 
     // 2 bytes per pixel (Gray + Alpha)
     // Pixel (0,0) = Black opaque (0, 255)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255 }, image.getPixel(0, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255 }, (try image.getPixel(0, 0)));
     // Pixel (1,0) = White semi (255, 128)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 128 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 128 }, (try image.getPixel(1, 0)));
     // Pixel (0,1) = Gray opaque (128, 255)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 128, 255 }, image.getPixel(0, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 128, 255 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = Gray transparent (64, 0)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 64, 0 }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 64, 0 }, (try image.getPixel(1, 1)));
 }
 
 test "decode 2x2 grayscale 16-bit PNG" {
@@ -427,13 +519,13 @@ test "decode 2x2 grayscale 16-bit PNG" {
 
     // 2 bytes per pixel (big-endian 16-bit)
     // Pixel (0,0) = 0x0000
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0 }, image.getPixel(0, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0 }, (try image.getPixel(0, 0)));
     // Pixel (1,0) = 0x4000 (16384)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0 }, (try image.getPixel(1, 0)));
     // Pixel (0,1) = 0x8000 (32768)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x80, 0 }, image.getPixel(0, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x80, 0 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = 0xFFFF (65535)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF }, (try image.getPixel(1, 1)));
 }
 
 test "decode 2x2 RGB 16-bit PNG" {
@@ -456,13 +548,13 @@ test "decode 2x2 RGB 16-bit PNG" {
 
     // 6 bytes per pixel (RGB, 2 bytes each, big-endian)
     // Pixel (0,0) = Red (0xFFFF, 0, 0)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF, 0, 0, 0, 0 }, image.getPixel(0, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF, 0, 0, 0, 0 }, (try image.getPixel(0, 0)));
     // Pixel (1,0) = Green (0, 0xFFFF, 0)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0xFF, 0xFF, 0, 0 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0xFF, 0xFF, 0, 0 }, (try image.getPixel(1, 0)));
     // Pixel (0,1) = Blue (0, 0, 0xFFFF)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0, 0, 0xFF, 0xFF }, image.getPixel(0, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0, 0, 0xFF, 0xFF }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = White (0xFFFF, 0xFFFF, 0xFFFF)
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, (try image.getPixel(1, 1)));
 }
 
 test "decode 4x4 indexed 8-bit PNG" {
@@ -499,10 +591,10 @@ test "decode 4x4 indexed 8-bit PNG" {
 
     // Check some pixel indices
     // Row 0: 0, 1, 2, 3
-    try std.testing.expectEqual(@as(u8, 0), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 1), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 2), image.getPixel(2, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 3), image.getPixel(3, 0)[0]);
+    try std.testing.expectEqual(@as(u8, 0), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 1), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 2), (try image.getPixel(2, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 3), (try image.getPixel(3, 0))[0]);
 }
 
 test "decode 8x2 1-bit grayscale PNG" {
@@ -527,9 +619,9 @@ test "decode 8x2 1-bit grayscale PNG" {
 
     // For 1-bit, pixels are packed into bytes (MSB first)
     // Row 0: 0xAA = 10101010
-    try std.testing.expectEqual(@as(u8, 0xAA), image.getRow(0)[0]);
+    try std.testing.expectEqual(@as(u8, 0xAA), (try image.getRow(0))[0]);
     // Row 1: 0x55 = 01010101
-    try std.testing.expectEqual(@as(u8, 0x55), image.getRow(1)[0]);
+    try std.testing.expectEqual(@as(u8, 0x55), (try image.getRow(1))[0]);
 }
 
 test "decode 4x2 4-bit grayscale PNG" {
@@ -554,11 +646,11 @@ test "decode 4x2 4-bit grayscale PNG" {
 
     // For 4-bit, pixels are packed into bytes (high nibble first)
     // Row 0: 0x01, 0x23 (pixels: 0, 1, 2, 3)
-    try std.testing.expectEqual(@as(u8, 0x01), image.getRow(0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x23), image.getRow(0)[1]);
+    try std.testing.expectEqual(@as(u8, 0x01), (try image.getRow(0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x23), (try image.getRow(0))[1]);
     // Row 1: 0xEF, 0xDC (pixels: 14, 15, 13, 12)
-    try std.testing.expectEqual(@as(u8, 0xEF), image.getRow(1)[0]);
-    try std.testing.expectEqual(@as(u8, 0xDC), image.getRow(1)[1]);
+    try std.testing.expectEqual(@as(u8, 0xEF), (try image.getRow(1))[0]);
+    try std.testing.expectEqual(@as(u8, 0xDC), (try image.getRow(1))[1]);
 }
 
 test "decode 4x2 2-bit grayscale PNG" {
@@ -583,9 +675,9 @@ test "decode 4x2 2-bit grayscale PNG" {
 
     // For 2-bit, 4 pixels per byte (high bits first)
     // Row 0: 0x1B = 00_01_10_11
-    try std.testing.expectEqual(@as(u8, 0x1B), image.getRow(0)[0]);
+    try std.testing.expectEqual(@as(u8, 0x1B), (try image.getRow(0))[0]);
     // Row 1: 0xE4 = 11_10_01_00
-    try std.testing.expectEqual(@as(u8, 0xE4), image.getRow(1)[0]);
+    try std.testing.expectEqual(@as(u8, 0xE4), (try image.getRow(1))[0]);
 }
 
 test "decode 4x2 indexed 4-bit PNG" {
@@ -619,9 +711,50 @@ test "decode 4x2 indexed 4-bit PNG" {
     try std.testing.expectEqual(@as(u8, 255), palette[3].b);
 
     // Row 0: 0x01, 0x23 (indices: 0, 1, 2, 3)
-    try std.testing.expectEqual(@as(u8, 0x01), image.getRow(0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x23), image.getRow(0)[1]);
+    try std.testing.expectEqual(@as(u8, 0x01), (try image.getRow(0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x23), (try image.getRow(0))[1]);
     // Row 1: 0x32, 0x10 (indices: 3, 2, 1, 0)
-    try std.testing.expectEqual(@as(u8, 0x32), image.getRow(1)[0]);
-    try std.testing.expectEqual(@as(u8, 0x10), image.getRow(1)[1]);
+    try std.testing.expectEqual(@as(u8, 0x32), (try image.getRow(1))[0]);
+    try std.testing.expectEqual(@as(u8, 0x10), (try image.getRow(1))[1]);
+}
+
+test "decode rejects PNG with excessive dimensions" {
+    // Construct a PNG with dimensions exceeding limits
+    // Width = 0x40000000 (> 1 billion), Height = 1
+    var oversized_png: [64]u8 = undefined;
+    var pos: usize = 0;
+
+    // PNG signature
+    @memcpy(oversized_png[pos..][0..8], &png.signature);
+    pos += 8;
+
+    // IHDR chunk (length=13, type=IHDR, data, crc)
+    std.mem.writeInt(u32, oversized_png[pos..][0..4], 13, .big);
+    pos += 4;
+    @memcpy(oversized_png[pos..][0..4], "IHDR");
+    pos += 4;
+
+    // IHDR data: width=0x40000000, height=1, depth=8, color=0, comp=0, filt=0, interlace=0
+    std.mem.writeInt(u32, oversized_png[pos..][0..4], 0x40000000, .big); // width
+    pos += 4;
+    std.mem.writeInt(u32, oversized_png[pos..][0..4], 1, .big); // height
+    pos += 4;
+    oversized_png[pos] = 8; // bit depth
+    pos += 1;
+    oversized_png[pos] = 0; // color type (grayscale)
+    pos += 1;
+    oversized_png[pos] = 0; // compression
+    pos += 1;
+    oversized_png[pos] = 0; // filter
+    pos += 1;
+    oversized_png[pos] = 0; // interlace
+    pos += 1;
+
+    // CRC (calculated for IHDR type + data)
+    const ihdr_crc = chunks.calculateCrc("IHDR".*, oversized_png[16..29]);
+    std.mem.writeInt(u32, oversized_png[pos..][0..4], ihdr_crc, .big);
+    pos += 4;
+
+    // Try to decode - should fail with InvalidIhdr (due to dimension validation)
+    try std.testing.expectError(error.InvalidIhdr, decode(std.testing.allocator, oversized_png[0..pos]));
 }

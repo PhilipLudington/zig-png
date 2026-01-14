@@ -143,10 +143,10 @@ test "png.decode decodes 2x2 grayscale PNG" {
     try std.testing.expectEqual(BitDepth.@"8", image.header.bit_depth);
 
     // Check pixel values
-    try std.testing.expectEqual(@as(u8, 0x00), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x40), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x80), image.getPixel(0, 1)[0]);
-    try std.testing.expectEqual(@as(u8, 0xFF), image.getPixel(1, 1)[0]);
+    try std.testing.expectEqual(@as(u8, 0x00), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x40), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x80), (try image.getPixel(0, 1))[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), (try image.getPixel(1, 1))[0]);
 }
 
 test "png.encode round-trip grayscale" {

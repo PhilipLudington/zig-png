@@ -47,6 +47,7 @@ pub const StreamDecodeError = error{
     PrematureEnd,
     InterlacedNotSupported,
     AlreadyFinished,
+    SizeOverflow,
 } || chunks.ChunkError || critical.HeaderError || zlib.ZlibError || filters.FilterError;
 
 /// State of the stream decoder state machine.
@@ -102,7 +103,8 @@ pub const StreamDecoder = struct {
     header: ?critical.Header,
 
     /// Parsed palette (available after PLTE is processed).
-    palette: ?[]const critical.PaletteEntry,
+    /// This is owned memory that is freed on deinit().
+    palette: ?[]critical.PaletteEntry,
 
     /// Current row being processed (0-indexed).
     current_row: u32,
@@ -142,6 +144,9 @@ pub const StreamDecoder = struct {
         self.raw_buffer.deinit(self.allocator);
         if (self.prev_row) |prev| {
             self.allocator.free(prev);
+        }
+        if (self.palette) |pal| {
+            self.allocator.free(pal);
         }
         self.* = undefined;
     }
@@ -293,7 +298,13 @@ pub const StreamDecoder = struct {
             // Try to decompress accumulated data
             try self.tryDecompress();
         } else if (std.mem.eql(u8, &result.chunk.chunk_type, &chunks.chunk_types.PLTE)) {
-            self.palette = critical.parsePlte(result.chunk.data) catch null;
+            // Parse and copy palette to owned memory
+            const parsed_pal = critical.parsePlte(result.chunk.data) catch null;
+            if (parsed_pal) |pal| {
+                const owned_pal = try self.allocator.alloc(critical.PaletteEntry, pal.len);
+                @memcpy(owned_pal, pal);
+                self.palette = owned_pal;
+            }
         } else if (std.mem.eql(u8, &result.chunk.chunk_type, &chunks.chunk_types.IEND)) {
             self.seen_iend = true;
             self.state = .finished;
@@ -319,7 +330,7 @@ pub const StreamDecoder = struct {
         const header = self.header orelse return;
 
         // Calculate how much raw data we need
-        const total_raw_size = header.rawDataSize();
+        const total_raw_size = header.rawDataSize() catch return error.SizeOverflow;
 
         // Only attempt full decompression when we have IEND or enough data
         // For streaming, we accumulate all IDAT chunks first, then decompress
@@ -355,8 +366,8 @@ pub const StreamDecoder = struct {
             return null; // No decompressed data yet
         }
 
-        const bytes_per_row_with_filter = header.bytesPerRowWithFilter();
-        const bytes_per_row = header.bytesPerRow();
+        const bytes_per_row_with_filter = header.bytesPerRowWithFilter() catch return error.SizeOverflow;
+        const bytes_per_row = header.bytesPerRow() catch return error.SizeOverflow;
         const bpp = header.bytesPerPixel();
 
         // Check if we have enough data for the next row
@@ -418,13 +429,13 @@ pub const StreamDecoder = struct {
         const header = self.header orelse return error.MissingIhdr;
 
         // Allocate pixel buffer for the complete image
-        const pixel_size = header.bytesPerRow() * header.height;
+        const bytes_per_row = header.bytesPerRow() catch return error.SizeOverflow;
+        const pixel_size = bytes_per_row * header.height;
         const pixels = try self.allocator.alloc(u8, pixel_size);
         errdefer self.allocator.free(pixels);
 
         // Copy all rows to the pixel buffer
-        const bytes_per_row = header.bytesPerRow();
-        const bytes_per_row_with_filter = header.bytesPerRowWithFilter();
+        const bytes_per_row_with_filter = header.bytesPerRowWithFilter() catch return error.SizeOverflow;
 
         for (0..header.height) |y| {
             const raw_row_start = y * bytes_per_row_with_filter;
@@ -571,10 +582,10 @@ test "StreamDecoder finish returns complete image" {
     // Verify
     try std.testing.expectEqual(@as(u32, 2), image.width());
     try std.testing.expectEqual(@as(u32, 2), image.height());
-    try std.testing.expectEqual(@as(u8, 0x00), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x40), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x80), image.getPixel(0, 1)[0]);
-    try std.testing.expectEqual(@as(u8, 0xFF), image.getPixel(1, 1)[0]);
+    try std.testing.expectEqual(@as(u8, 0x00), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x40), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x80), (try image.getPixel(0, 1))[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), (try image.getPixel(1, 1))[0]);
 }
 
 test "StreamDecoder rejects invalid signature" {
@@ -656,8 +667,8 @@ test "StreamDecoder RGB image" {
     defer image.deinit();
 
     try std.testing.expectEqual(color.ColorType.rgb, image.header.color_type);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, image.getPixel(0, 0));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, image.getPixel(1, 0));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, image.getPixel(0, 1));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, (try image.getPixel(0, 0)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, (try image.getPixel(1, 0)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, (try image.getPixel(0, 1)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, (try image.getPixel(1, 1)));
 }

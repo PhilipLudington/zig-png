@@ -88,12 +88,13 @@ pub fn readChunk(buffer: []const u8) ChunkError!struct { chunk: Chunk, bytes_con
     const length = std.mem.readInt(u32, buffer[0..4], .big);
 
     // Validate length doesn't exceed reasonable bounds
+    // (also prevents overflow in total_size calculation on 32-bit systems)
     if (length > 0x7FFFFFFF) {
         return error.InvalidLength;
     }
 
-    // Check we have enough data
-    const total_size = 4 + 4 + length + 4;
+    // Check we have enough data (use checked arithmetic to prevent overflow)
+    const total_size = std.math.add(usize, 12, length) catch return error.InvalidLength;
     if (buffer.len < total_size) {
         return error.UnexpectedEndOfData;
     }

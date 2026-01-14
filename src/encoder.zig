@@ -21,6 +21,7 @@ pub const EncodeError = error{
     BufferTooSmall,
     InvalidImage,
     CompressionFailed,
+    SizeOverflow,
 } || zlib.ZlibCompressError;
 
 /// Options for PNG encoding.
@@ -34,8 +35,10 @@ pub const EncodeOptions = struct {
 
 /// Calculate the maximum encoded size for a PNG image.
 /// This is a conservative upper bound for buffer allocation.
-pub fn maxEncodedSize(header: critical.Header) usize {
-    const pixel_data_size = header.bytesPerRow() * header.height;
+/// Returns error if the size calculation would overflow.
+pub fn maxEncodedSize(header: critical.Header) EncodeError!usize {
+    const bytes_per_row = header.bytesPerRow() catch return error.SizeOverflow;
+    const pixel_data_size = bytes_per_row * header.height;
     // PNG overhead: signature (8) + IHDR chunk (25) + PLTE max (768+12)
     // + IDAT header per chunk + IEND (12) + compression expansion
     // Worst case: data expands by ~0.1% + 12 bytes per 16KB block + zlib overhead
@@ -153,7 +156,7 @@ fn filterAndCompressNonInterlaced(
     pixels: []const u8,
     options: EncodeOptions,
 ) EncodeError![]u8 {
-    const bytes_per_row = header.bytesPerRow();
+    const bytes_per_row = header.bytesPerRow() catch return error.SizeOverflow;
     const bytes_per_row_with_filter = bytes_per_row + 1;
     const bpp = header.bytesPerPixel();
 
@@ -197,7 +200,7 @@ fn filterAndCompressInterlaced(
     const bpp = header.bytesPerPixel();
 
     // Calculate total size for all passes (with filter bytes)
-    const total_raw_size = Adam7.totalInterlacedBytes(header);
+    const total_raw_size = Adam7.totalInterlacedBytes(header) catch return error.SizeOverflow;
 
     // Allocate buffers for pass pixel data
     var pass_buffers: [7][]u8 = undefined;
@@ -212,7 +215,8 @@ fn filterAndCompressInterlaced(
 
     for (0..interlace.pass_count) |p| {
         const pass: u3 = @intCast(p);
-        const pass_pixel_bytes = Adam7.passRowBytes(pass, header) * Adam7.passHeight(pass, header.height);
+        const pass_row_bytes_inner = Adam7.passRowBytes(pass, header) catch return error.SizeOverflow;
+        const pass_pixel_bytes = pass_row_bytes_inner * Adam7.passHeight(pass, header.height);
         if (pass_pixel_bytes == 0) {
             pass_buffers[p] = &[_]u8{};
         } else {
@@ -232,7 +236,8 @@ fn filterAndCompressInterlaced(
     // Scratch buffer for adaptive filter selection
     var max_row_bytes: usize = 0;
     for (0..interlace.pass_count) |p| {
-        max_row_bytes = @max(max_row_bytes, Adam7.passRowBytes(@intCast(p), header));
+        const prb = Adam7.passRowBytes(@intCast(p), header) catch return error.SizeOverflow;
+        max_row_bytes = @max(max_row_bytes, prb);
     }
     var scratch: []u8 = &.{};
     if (options.filter_strategy == .adaptive and max_row_bytes > 0) {
@@ -249,7 +254,7 @@ fn filterAndCompressInterlaced(
 
         if (pass_w == 0 or pass_h == 0) continue;
 
-        const pass_row_bytes = Adam7.passRowBytes(pass, header);
+        const pass_row_bytes = Adam7.passRowBytes(pass, header) catch return error.SizeOverflow;
         const pass_row_bytes_with_filter = pass_row_bytes + 1;
         const pass_pixels = pass_buffers[p];
 
@@ -326,7 +331,7 @@ pub fn encodeFile(
     path: []const u8,
     options: EncodeOptions,
 ) !void {
-    const max_size = maxEncodedSize(image.header);
+    const max_size = try maxEncodedSize(image.header);
     const buffer = try allocator.alloc(u8, max_size);
     defer allocator.free(buffer);
 
@@ -613,10 +618,10 @@ test "maxEncodedSize" {
         .interlace_method = .none,
     };
 
-    const max_size = maxEncodedSize(header);
+    const max_size = try maxEncodedSize(header);
 
     // Should be larger than raw pixel data
-    const raw_size = header.bytesPerRow() * header.height;
+    const raw_size = (try header.bytesPerRow()) * header.height;
     try std.testing.expect(max_size > raw_size);
 
     // Should be reasonable (not absurdly large)

@@ -39,6 +39,7 @@ pub const StreamEncodeError = error{
     RowCountMismatch,
     InterlacedNotSupported,
     WriteFailed,
+    SizeOverflow,
 } || zlib.ZlibCompressError;
 
 /// Options for stream encoding.
@@ -119,7 +120,8 @@ pub fn StreamEncoder(comptime WriterType: type) type {
 
             // Allocate scratch buffer for adaptive filter selection
             if (options.filter_strategy == .adaptive) {
-                self.scratch = try allocator.alloc(u8, header.bytesPerRow());
+                const bpr = header.bytesPerRow() catch return error.SizeOverflow;
+                self.scratch = try allocator.alloc(u8, bpr);
             }
 
             // Write PNG signature
@@ -167,7 +169,7 @@ pub fn StreamEncoder(comptime WriterType: type) type {
                 return error.RowCountMismatch;
             }
 
-            const bytes_per_row = self.header.bytesPerRow();
+            const bytes_per_row = self.header.bytesPerRow() catch return error.SizeOverflow;
             if (pixels.len != bytes_per_row) {
                 return error.InvalidImage;
             }
@@ -358,10 +360,10 @@ test "StreamEncoder encode simple grayscale" {
 
     try std.testing.expectEqual(@as(u32, 2), image.width());
     try std.testing.expectEqual(@as(u32, 2), image.height());
-    try std.testing.expectEqual(@as(u8, 0x00), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x40), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 0x80), image.getPixel(0, 1)[0]);
-    try std.testing.expectEqual(@as(u8, 0xFF), image.getPixel(1, 1)[0]);
+    try std.testing.expectEqual(@as(u8, 0x00), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x40), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 0x80), (try image.getPixel(0, 1))[0]);
+    try std.testing.expectEqual(@as(u8, 0xFF), (try image.getPixel(1, 1))[0]);
 }
 
 test "StreamEncoder encode RGB" {
@@ -400,10 +402,10 @@ test "StreamEncoder encode RGB" {
     defer image.deinit();
 
     try std.testing.expectEqual(color.ColorType.rgb, image.header.color_type);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, image.getPixel(0, 0));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, image.getPixel(1, 0));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, image.getPixel(0, 1));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, image.getPixel(1, 1));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, (try image.getPixel(0, 0)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0 }, (try image.getPixel(1, 0)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255 }, (try image.getPixel(0, 1)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255 }, (try image.getPixel(1, 1)));
 }
 
 test "StreamEncoder encode RGBA" {
@@ -441,8 +443,8 @@ test "StreamEncoder encode RGBA" {
     defer image.deinit();
 
     try std.testing.expectEqual(color.ColorType.rgba, image.header.color_type);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 255 }, image.getPixel(0, 0));
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0, 128 }, image.getPixel(1, 0));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 255 }, (try image.getPixel(0, 0)));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 255, 0, 128 }, (try image.getPixel(1, 0)));
 }
 
 test "StreamEncoder encode indexed" {
@@ -487,10 +489,10 @@ test "StreamEncoder encode indexed" {
     defer image.deinit();
 
     try std.testing.expectEqual(color.ColorType.indexed, image.header.color_type);
-    try std.testing.expectEqual(@as(u8, 0), image.getPixel(0, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 1), image.getPixel(1, 0)[0]);
-    try std.testing.expectEqual(@as(u8, 2), image.getPixel(0, 1)[0]);
-    try std.testing.expectEqual(@as(u8, 3), image.getPixel(1, 1)[0]);
+    try std.testing.expectEqual(@as(u8, 0), (try image.getPixel(0, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 1), (try image.getPixel(1, 0))[0]);
+    try std.testing.expectEqual(@as(u8, 2), (try image.getPixel(0, 1))[0]);
+    try std.testing.expectEqual(@as(u8, 3), (try image.getPixel(1, 1))[0]);
 }
 
 test "StreamEncoder rejects interlaced" {
@@ -633,7 +635,7 @@ test "StreamEncoder with different filter strategies" {
         defer image.deinit();
 
         for (0..4) |y| {
-            const row = image.getRow(@intCast(y));
+            const row = (try image.getRow(@intCast(y)));
             try std.testing.expectEqualSlices(u8, &rows[y], row);
         }
     }
@@ -686,11 +688,11 @@ test "StreamEncoder larger image" {
     try std.testing.expectEqual(@as(u32, 64), image.height());
 
     // Check a few pixels
-    const pixel_0_0 = image.getPixel(0, 0);
+    const pixel_0_0 = (try image.getPixel(0, 0));
     try std.testing.expectEqual(@as(u8, 0), pixel_0_0[0]);
     try std.testing.expectEqual(@as(u8, 0), pixel_0_0[1]);
 
-    const pixel_63_63 = image.getPixel(63, 63);
+    const pixel_63_63 = (try image.getPixel(63, 63));
     try std.testing.expectEqual(@as(u8, 252), pixel_63_63[0]);
     try std.testing.expectEqual(@as(u8, 252), pixel_63_63[1]);
 }

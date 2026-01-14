@@ -44,14 +44,20 @@ pub const Header = struct {
 
         // Width (4 bytes, big-endian)
         const width = std.mem.readInt(u32, data[0..4], .big);
-        if (width == 0) {
+        if (width == 0 or width > color.max_dimension) {
             return error.InvalidWidth;
         }
 
         // Height (4 bytes, big-endian)
         const height = std.mem.readInt(u32, data[4..8], .big);
-        if (height == 0) {
+        if (height == 0 or height > color.max_dimension) {
             return error.InvalidHeight;
+        }
+
+        // Check total pixel count doesn't exceed limit
+        const total_pixels = @as(u64, width) * @as(u64, height);
+        if (total_pixels > color.max_pixels) {
+            return error.InvalidHeight; // Use existing error for dimensions too large
         }
 
         // Bit depth (1 byte)
@@ -106,19 +112,24 @@ pub const Header = struct {
     }
 
     /// Calculate bytes per row (not including filter byte).
-    pub fn bytesPerRow(self: Self) usize {
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn bytesPerRow(self: Self) color.SizeError!usize {
         return color.bytesPerRow(self.width, self.color_type, self.bit_depth);
     }
 
     /// Calculate total bytes per row including filter byte.
-    pub fn bytesPerRowWithFilter(self: Self) usize {
-        return self.bytesPerRow() + 1;
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn bytesPerRowWithFilter(self: Self) color.SizeError!usize {
+        const row_bytes = try self.bytesPerRow();
+        return std.math.add(usize, row_bytes, 1) catch return error.Overflow;
     }
 
     /// Calculate total raw image data size (after decompression, before unfiltering).
     /// This is the size of all scanlines including filter bytes.
-    pub fn rawDataSize(self: Self) usize {
-        return self.bytesPerRowWithFilter() * self.height;
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn rawDataSize(self: Self) color.SizeError!usize {
+        const row_with_filter = try self.bytesPerRowWithFilter();
+        return std.math.mul(usize, row_with_filter, self.height) catch return error.Overflow;
     }
 
     /// Check if this header represents an interlaced image.
@@ -267,13 +278,39 @@ test "Header helper methods" {
     try std.testing.expectEqual(@as(u8, 4), header.bytesPerPixel());
 
     // 100 pixels * 4 bytes = 400 bytes per row
-    try std.testing.expectEqual(@as(usize, 400), header.bytesPerRow());
+    try std.testing.expectEqual(@as(usize, 400), try header.bytesPerRow());
 
     // Including filter byte
-    try std.testing.expectEqual(@as(usize, 401), header.bytesPerRowWithFilter());
+    try std.testing.expectEqual(@as(usize, 401), try header.bytesPerRowWithFilter());
 
     // Total raw data = 401 * 50 = 20050 bytes
-    try std.testing.expectEqual(@as(usize, 20050), header.rawDataSize());
+    try std.testing.expectEqual(@as(usize, 20050), try header.rawDataSize());
+}
+
+test "Header rejects dimensions exceeding limits" {
+    // Width too large
+    var data = [_]u8{
+        0x40, 0x00, 0x00, 0x00, // width = 0x40000000 (> 1 billion)
+        0x00, 0x00, 0x00, 0x10, // height = 16
+        0x08, 0x02, 0x00, 0x00, 0x00,
+    };
+    try std.testing.expectError(error.InvalidWidth, Header.parse(&data));
+
+    // Height too large
+    data = [_]u8{
+        0x00, 0x00, 0x00, 0x10, // width = 16
+        0x40, 0x00, 0x00, 0x00, // height = 0x40000000 (> 1 billion)
+        0x08, 0x02, 0x00, 0x00, 0x00,
+    };
+    try std.testing.expectError(error.InvalidHeight, Header.parse(&data));
+
+    // Total pixels too large (both dimensions valid individually but product too large)
+    data = [_]u8{
+        0x00, 0x01, 0x00, 0x00, // width = 65536
+        0x00, 0x01, 0x00, 0x00, // height = 65536 (total = 4 billion+ pixels)
+        0x08, 0x02, 0x00, 0x00, 0x00,
+    };
+    try std.testing.expectError(error.InvalidHeight, Header.parse(&data));
 }
 
 test "Header.serialize roundtrip" {

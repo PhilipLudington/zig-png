@@ -66,31 +66,37 @@ pub const Adam7 = struct {
     }
 
     /// Calculate bytes per row for a pass (not including filter byte).
-    pub fn passRowBytes(pass: u3, header: critical.Header) usize {
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn passRowBytes(pass: u3, header: critical.Header) color.SizeError!usize {
         const pass_w = passWidth(pass, header.width);
         if (pass_w == 0) return 0;
         return color.bytesPerRow(pass_w, header.color_type, header.bit_depth);
     }
 
     /// Calculate bytes per row for a pass (including filter byte).
-    pub fn passRowBytesWithFilter(pass: u3, header: critical.Header) usize {
-        const row_bytes = passRowBytes(pass, header);
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn passRowBytesWithFilter(pass: u3, header: critical.Header) color.SizeError!usize {
+        const row_bytes = try passRowBytes(pass, header);
         if (row_bytes == 0) return 0;
-        return row_bytes + 1;
+        return std.math.add(usize, row_bytes, 1) catch return error.Overflow;
     }
 
     /// Calculate total raw bytes for a pass (including filter bytes).
-    pub fn passRawBytes(pass: u3, header: critical.Header) usize {
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn passRawBytes(pass: u3, header: critical.Header) color.SizeError!usize {
         const pass_h = passHeight(pass, header.height);
         if (pass_h == 0) return 0;
-        return passRowBytesWithFilter(pass, header) * pass_h;
+        const row_with_filter = try passRowBytesWithFilter(pass, header);
+        return std.math.mul(usize, row_with_filter, pass_h) catch return error.Overflow;
     }
 
     /// Calculate total raw bytes for all passes combined.
-    pub fn totalInterlacedBytes(header: critical.Header) usize {
+    /// Returns error.Overflow if the calculation would overflow.
+    pub fn totalInterlacedBytes(header: critical.Header) color.SizeError!usize {
         var total: usize = 0;
         for (0..pass_count) |p| {
-            total += passRawBytes(@intCast(p), header);
+            const pass_bytes = try passRawBytes(@intCast(p), header);
+            total = std.math.add(usize, total, pass_bytes) catch return error.Overflow;
         }
         return total;
     }
@@ -115,13 +121,15 @@ pub const Adam7 = struct {
     /// Passes with no pixels should have empty slices.
     ///
     /// `output` must be pre-allocated to header.bytesPerRow() * header.height bytes.
+    /// Uses unchecked arithmetic since dimensions should be validated at header parse time.
     pub fn deinterlace(
         pass_data: [7][]const u8,
         output: []u8,
         header: critical.Header,
     ) void {
         const bpp = header.bytesPerPixel();
-        const output_row_bytes = header.bytesPerRow();
+        // Use unchecked since header should already be validated
+        const output_row_bytes = color.bytesPerRowUnchecked(header.width, header.color_type, header.bit_depth);
         const bits_per_pixel = header.bitsPerPixel();
 
         for (0..pass_count) |p| {
@@ -133,7 +141,8 @@ pub const Adam7 = struct {
             const pass_h = passHeight(pass, header.height);
             if (pass_w == 0 or pass_h == 0) continue;
 
-            const pass_row_bytes = passRowBytes(pass, header);
+            // Use unchecked since dimensions validated at parse time
+            const pass_row_bytes = color.bytesPerRowUnchecked(pass_w, header.color_type, header.bit_depth);
 
             for (0..pass_h) |pass_y| {
                 const src_row_start = pass_y * pass_row_bytes;
@@ -201,13 +210,15 @@ pub const Adam7 = struct {
     /// Each pass buffer in `pass_output` must be pre-allocated to
     /// passRowBytes(pass, header) * passHeight(pass, header) bytes.
     /// Passes with no pixels should have empty slices.
+    /// Uses unchecked arithmetic since dimensions should be validated at header parse time.
     pub fn interlace(
         input: []const u8,
         pass_output: *[7][]u8,
         header: critical.Header,
     ) void {
         const bpp = header.bytesPerPixel();
-        const input_row_bytes = header.bytesPerRow();
+        // Use unchecked since header should already be validated
+        const input_row_bytes = color.bytesPerRowUnchecked(header.width, header.color_type, header.bit_depth);
         const bits_per_pixel = header.bitsPerPixel();
 
         for (0..pass_count) |p| {
@@ -219,7 +230,8 @@ pub const Adam7 = struct {
             const pass_h = passHeight(pass, header.height);
             if (pass_w == 0 or pass_h == 0) continue;
 
-            const pass_row_bytes = passRowBytes(pass, header);
+            // Use unchecked since dimensions validated at parse time
+            const pass_row_bytes = color.bytesPerRowUnchecked(pass_w, header.color_type, header.bit_depth);
 
             for (0..pass_h) |pass_y| {
                 const dst_row_start = pass_y * pass_row_bytes;
@@ -368,13 +380,13 @@ test "passRowBytes" {
     };
 
     // 8-bit grayscale: 1 byte per pixel
-    try std.testing.expectEqual(@as(usize, 1), Adam7.passRowBytes(0, header)); // 1 pixel
-    try std.testing.expectEqual(@as(usize, 1), Adam7.passRowBytes(1, header)); // 1 pixel
-    try std.testing.expectEqual(@as(usize, 2), Adam7.passRowBytes(2, header)); // 2 pixels
-    try std.testing.expectEqual(@as(usize, 2), Adam7.passRowBytes(3, header)); // 2 pixels
-    try std.testing.expectEqual(@as(usize, 4), Adam7.passRowBytes(4, header)); // 4 pixels
-    try std.testing.expectEqual(@as(usize, 4), Adam7.passRowBytes(5, header)); // 4 pixels
-    try std.testing.expectEqual(@as(usize, 8), Adam7.passRowBytes(6, header)); // 8 pixels
+    try std.testing.expectEqual(@as(usize, 1), try Adam7.passRowBytes(0, header)); // 1 pixel
+    try std.testing.expectEqual(@as(usize, 1), try Adam7.passRowBytes(1, header)); // 1 pixel
+    try std.testing.expectEqual(@as(usize, 2), try Adam7.passRowBytes(2, header)); // 2 pixels
+    try std.testing.expectEqual(@as(usize, 2), try Adam7.passRowBytes(3, header)); // 2 pixels
+    try std.testing.expectEqual(@as(usize, 4), try Adam7.passRowBytes(4, header)); // 4 pixels
+    try std.testing.expectEqual(@as(usize, 4), try Adam7.passRowBytes(5, header)); // 4 pixels
+    try std.testing.expectEqual(@as(usize, 8), try Adam7.passRowBytes(6, header)); // 8 pixels
 }
 
 test "passRowBytes RGB" {
@@ -389,9 +401,9 @@ test "passRowBytes RGB" {
     };
 
     // 8-bit RGB: 3 bytes per pixel
-    try std.testing.expectEqual(@as(usize, 3), Adam7.passRowBytes(0, header)); // 1 pixel
-    try std.testing.expectEqual(@as(usize, 6), Adam7.passRowBytes(2, header)); // 2 pixels
-    try std.testing.expectEqual(@as(usize, 24), Adam7.passRowBytes(6, header)); // 8 pixels
+    try std.testing.expectEqual(@as(usize, 3), try Adam7.passRowBytes(0, header)); // 1 pixel
+    try std.testing.expectEqual(@as(usize, 6), try Adam7.passRowBytes(2, header)); // 2 pixels
+    try std.testing.expectEqual(@as(usize, 24), try Adam7.passRowBytes(6, header)); // 8 pixels
 }
 
 test "totalInterlacedBytes" {
@@ -413,7 +425,7 @@ test "totalInterlacedBytes" {
     // Pass 5: 4x4 = 20 bytes (4*5)
     // Pass 6: 8x4 = 36 bytes (4*9)
     // Total: 2+2+3+6+10+20+36 = 79 bytes
-    const total = Adam7.totalInterlacedBytes(header);
+    const total = try Adam7.totalInterlacedBytes(header);
     try std.testing.expectEqual(@as(usize, 79), total);
 }
 

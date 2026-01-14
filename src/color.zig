@@ -171,11 +171,37 @@ pub fn bitsPerPixel(color_type: ColorType, bit_depth: BitDepth) u8 {
     return color_type.sampleCount() * bit_depth.toInt();
 }
 
+/// Errors that can occur during size calculations.
+pub const SizeError = error{
+    /// The calculated size would overflow.
+    Overflow,
+    /// The dimensions exceed the maximum allowed.
+    DimensionsTooLarge,
+};
+
+/// Maximum allowed dimension for width or height.
+/// This prevents integer overflow in size calculations and memory exhaustion.
+/// 1 billion pixels per dimension is generous but safe.
+pub const max_dimension: u32 = 1_000_000_000;
+
+/// Maximum total pixels allowed (width * height).
+/// Prevents memory exhaustion even with valid individual dimensions.
+pub const max_pixels: u64 = 4_000_000_000; // 4 billion pixels
+
 /// Calculate bytes per row (scanline) for given dimensions and color info.
 /// Does not include the filter type byte.
-pub fn bytesPerRow(width: u32, color_type: ColorType, bit_depth: BitDepth) usize {
+/// Returns error.Overflow if the calculation would overflow.
+pub fn bytesPerRow(width: u32, color_type: ColorType, bit_depth: BitDepth) SizeError!usize {
+    const bpp = bitsPerPixel(color_type, bit_depth);
+    const bits_per_row = std.math.mul(usize, @as(usize, width), bpp) catch return error.Overflow;
+    return (bits_per_row + 7) / 8; // Round up to nearest byte (safe, max add is 7)
+}
+
+/// Unchecked version for use in tests with known-safe values.
+/// Only use when width is known to be small enough to not overflow.
+pub fn bytesPerRowUnchecked(width: u32, color_type: ColorType, bit_depth: BitDepth) usize {
     const bits_per_row = @as(usize, width) * bitsPerPixel(color_type, bit_depth);
-    return (bits_per_row + 7) / 8; // Round up to nearest byte
+    return (bits_per_row + 7) / 8;
 }
 
 // Tests
@@ -279,17 +305,32 @@ test "bytesPerPixel" {
 
 test "bytesPerRow" {
     // 8-bit grayscale, 100 pixels = 100 bytes
-    try std.testing.expectEqual(@as(usize, 100), bytesPerRow(100, .grayscale, .@"8"));
+    try std.testing.expectEqual(@as(usize, 100), try bytesPerRow(100, .grayscale, .@"8"));
 
     // 1-bit grayscale, 10 pixels = 2 bytes (10 bits rounded up)
-    try std.testing.expectEqual(@as(usize, 2), bytesPerRow(10, .grayscale, .@"1"));
+    try std.testing.expectEqual(@as(usize, 2), try bytesPerRow(10, .grayscale, .@"1"));
 
     // 1-bit grayscale, 8 pixels = 1 byte
-    try std.testing.expectEqual(@as(usize, 1), bytesPerRow(8, .grayscale, .@"1"));
+    try std.testing.expectEqual(@as(usize, 1), try bytesPerRow(8, .grayscale, .@"1"));
 
     // 24-bit RGB, 100 pixels = 300 bytes
-    try std.testing.expectEqual(@as(usize, 300), bytesPerRow(100, .rgb, .@"8"));
+    try std.testing.expectEqual(@as(usize, 300), try bytesPerRow(100, .rgb, .@"8"));
 
     // 32-bit RGBA, 100 pixels = 400 bytes
-    try std.testing.expectEqual(@as(usize, 400), bytesPerRow(100, .rgba, .@"8"));
+    try std.testing.expectEqual(@as(usize, 400), try bytesPerRow(100, .rgba, .@"8"));
+}
+
+test "bytesPerRow overflow protection" {
+    // On 64-bit systems, a u32 width times max bpp (64) cannot overflow usize.
+    // Overflow protection is only relevant on 32-bit systems.
+    // On 32-bit: 0xFFFFFFFF * 64 would overflow u32 (max ~4B)
+    // The dimension limits (max 1 billion) are the primary protection.
+    if (@sizeOf(usize) == 4) {
+        // 32-bit system: test actual overflow
+        try std.testing.expectError(error.Overflow, bytesPerRow(0xFFFFFFFF, .rgba, .@"16"));
+        try std.testing.expectError(error.Overflow, bytesPerRow(0x80000000, .rgb, .@"8"));
+    }
+    // On all platforms: very large but valid sizes should still work
+    // 1000 pixels * 64 bits (rgba@16) = 8000 bytes - should succeed
+    _ = try bytesPerRow(1000, .rgba, .@"16");
 }
