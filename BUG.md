@@ -1,8 +1,8 @@
 # Project Bugs
 
-## [ ] Bug 1: getPixel returns wrong data for 1-, 2- and 4-bit images
+## [x] Bug 1: getPixel returns wrong data for 1-, 2- and 4-bit images
 
-**Status:** Open
+**Status:** Fixed
 
 **System:** pixel access — `Image.getPixel`, `Image.getRow` in `src/decoder.zig`
 
@@ -22,3 +22,14 @@ this accessor cannot return one bit.
 
 **Actual:** `getPixel(7, 1)` returns `error.BufferOutOfBounds`; `getPixel(1, 0)` returns
 the packed byte `0xAA`.
+
+**Fix:** `getPixel` now returns `error.SubBytePixel` at depths below 8, since no byte
+slice can hold one sub-byte pixel. New `Image.getSample(x, y) !u16` returns the single
+unpacked sample (gray level or palette index) of a grayscale or indexed image at any depth,
+offsetting by `x * bitsPerPixel` and shifting out the packed bits; other color types get
+`error.NotSingleChannel` (`src/decoder.zig`, `getPixel` / `getSample`).
+
+**Test:** `src/decoder.zig` test "getPixel never hands back packed bytes on a 1-bit
+image", plus `getSample` checks in the 1-, 2-, 4-bit grayscale, 4-bit indexed, 8-bit
+indexed, 16-bit grayscale and grayscale+alpha decode tests. These are synthetic images, not
+PngSuite files: the library's unit tests cannot reach `test_data/` from `src/`.

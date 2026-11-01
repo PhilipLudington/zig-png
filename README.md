@@ -55,9 +55,13 @@ pub fn main() !void {
     std.debug.print("Size: {}x{}\n", .{ image.width(), image.height() });
     std.debug.print("Color type: {}\n", .{image.header.color_type});
 
-    // Access pixel data
-    const pixel = image.getPixel(0, 0);
+    // Access pixel data: raw bytes, for 8- and 16-bit images
+    const pixel = try image.getPixel(0, 0);
     std.debug.print("Top-left pixel: {any}\n", .{pixel});
+
+    // Grayscale or indexed at any depth (1, 2, 4, 8, 16 bits):
+    // one gray level or palette index
+    // const sample = try image.getSample(0, 0);
 
     // Get a full row
     const row = image.getRow(0);
