@@ -144,7 +144,7 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     const header = critical.Header.parse(first_chunk.data) catch return error.InvalidIhdr;
 
     // Collect IDAT chunks
-    var idat_data = std.ArrayListUnmanaged(u8){};
+    var idat_data = std.ArrayListUnmanaged(u8).empty;
     defer idat_data.deinit(allocator);
 
     var palette: ?[]critical.PaletteEntry = null;
