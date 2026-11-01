@@ -43,6 +43,10 @@ pub const PixelAccessError = error{
     YOutOfBounds,
     /// The pixel buffer is smaller than expected for the given coordinates.
     BufferOutOfBounds,
+    /// getPixel was called on a 1-, 2- or 4-bit image; use getSample.
+    SubBytePixel,
+    /// getSample was called on an image with more than one sample per pixel.
+    NotSingleChannel,
 };
 
 /// Decoded PNG image.
@@ -73,7 +77,10 @@ pub const Image = struct {
     }
 
     /// Get a pixel value at the given coordinates.
-    /// Returns raw bytes for that pixel (1-8 bytes depending on format).
+    /// Returns the raw bytes for that pixel (1-8 bytes depending on format),
+    /// for bit depths of 8 and 16 only.
+    /// At bit depths 1, 2 and 4 several pixels share one byte, so no slice can
+    /// hold one pixel: this returns error.SubBytePixel. Use getSample instead.
     /// Returns error if coordinates are out of bounds.
     pub fn getPixel(self: *const Self, x: u32, y: u32) PixelAccessError![]const u8 {
         if (x >= self.header.width) {
@@ -81,6 +88,9 @@ pub const Image = struct {
         }
         if (y >= self.header.height) {
             return error.YOutOfBounds;
+        }
+        if (self.header.bitsPerPixel() < 8) {
+            return error.SubBytePixel;
         }
         const bpp = self.header.bytesPerPixel();
         // Use unchecked version since dimensions are validated at decode time
@@ -91,6 +101,47 @@ pub const Image = struct {
             return error.BufferOutOfBounds;
         }
         return self.pixels[pixel_start..][0..bpp];
+    }
+
+    /// Get the single sample at the given coordinates of a grayscale or
+    /// indexed image, at any bit depth (1, 2, 4, 8 or 16).
+    /// For an indexed image the value is the palette index; for grayscale it
+    /// is the gray level, unscaled (0..2^depth-1).
+    /// Returns error.NotSingleChannel for RGB, RGBA and grayscale+alpha
+    /// images, whose pixels hold more than one sample; use getPixel there.
+    pub fn getSample(self: *const Self, x: u32, y: u32) PixelAccessError!u16 {
+        if (x >= self.header.width) {
+            return error.XOutOfBounds;
+        }
+        if (y >= self.header.height) {
+            return error.YOutOfBounds;
+        }
+        switch (self.header.color_type) {
+            .grayscale, .indexed => {},
+            else => return error.NotSingleChannel,
+        }
+        const bits: usize = self.header.bitsPerPixel();
+        // Use unchecked version since dimensions are validated at decode time
+        const bytes_per_row = color.bytesPerRowUnchecked(self.header.width, self.header.color_type, self.header.bit_depth);
+        const row_start = @as(usize, y) * bytes_per_row;
+
+        if (bits == 16) {
+            const start = row_start + @as(usize, x) * 2;
+            if (start + 2 > self.pixels.len) {
+                return error.BufferOutOfBounds;
+            }
+            return std.mem.readInt(u16, self.pixels[start..][0..2], .big);
+        }
+
+        // Depths 1, 2, 4 and 8: samples are packed most-significant bits first.
+        const bit_offset = @as(usize, x) * bits;
+        const byte_index = row_start + bit_offset / 8;
+        if (byte_index >= self.pixels.len) {
+            return error.BufferOutOfBounds;
+        }
+        const shift: u3 = @intCast(8 - bits - bit_offset % 8);
+        const mask: u8 = @intCast((@as(u16, 1) << @intCast(bits)) - 1);
+        return (self.pixels[byte_index] >> shift) & mask;
     }
 
     /// Get a full row of pixel data.
@@ -144,7 +195,7 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     const header = critical.Header.parse(first_chunk.data) catch return error.InvalidIhdr;
 
     // Collect IDAT chunks
-    var idat_data = std.ArrayListUnmanaged(u8){};
+    var idat_data = std.ArrayListUnmanaged(u8).empty;
     defer idat_data.deinit(allocator);
 
     var palette: ?[]critical.PaletteEntry = null;
@@ -398,6 +449,30 @@ test "getPixel returns error on out of bounds access" {
     try std.testing.expectError(error.YOutOfBounds, image.getPixel(0, 100));
 }
 
+test "getPixel never hands back packed bytes on a 1-bit image" {
+    // Bug 1: 8x2 1-bit grayscale, rows 0xAA and 0x55 (one byte per row).
+    // getPixel offset by x bytes, not x bits, so it returned a byte holding
+    // eight pixels, and at (7, 1) read past the 2-byte buffer.
+    const test_png = [_]u8{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x4D, 0xEF, 0xA0,
+        0x40, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x58, 0xC5, 0x10, 0x0A,
+        0x00, 0x02, 0x57, 0x01, 0x00, 0x58, 0xB2, 0xCA, 0x23, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    var image = try decode(std.testing.allocator, &test_png);
+    defer image.deinit();
+
+    // A valid in-bounds pixel must not be reported as a buffer overrun.
+    if (image.getPixel(7, 1)) |_| {
+        return error.TestUnexpectedResult; // a slice cannot hold one bit
+    } else |err| {
+        try std.testing.expect(err != error.BufferOutOfBounds);
+    }
+    // Nor may it return the packed byte 0xAA as pixel (1, 0).
+    if (image.getPixel(1, 0)) |_| return error.TestUnexpectedResult else |_| {}
+}
+
 test "getRow returns error on out of bounds access" {
     // A 2x2 grayscale PNG
     const test_png = [_]u8{
@@ -505,6 +580,9 @@ test "decode 2x2 grayscale+alpha 8-bit PNG" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 128, 255 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = Gray transparent (64, 0)
     try std.testing.expectEqualSlices(u8, &[_]u8{ 64, 0 }, (try image.getPixel(1, 1)));
+
+    // Two samples per pixel: getSample refuses
+    try std.testing.expectError(error.NotSingleChannel, image.getSample(0, 0));
 }
 
 test "decode 2x2 grayscale 16-bit PNG" {
@@ -534,6 +612,10 @@ test "decode 2x2 grayscale 16-bit PNG" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x80, 0 }, (try image.getPixel(0, 1)));
     // Pixel (1,1) = 0xFFFF (65535)
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xFF }, (try image.getPixel(1, 1)));
+
+    // getSample reads the big-endian 16-bit value
+    try std.testing.expectEqual(@as(u16, 0x4000), try image.getSample(1, 0));
+    try std.testing.expectEqual(@as(u16, 0xFFFF), try image.getSample(1, 1));
 }
 
 test "decode 2x2 RGB 16-bit PNG" {
@@ -603,6 +685,9 @@ test "decode 4x4 indexed 8-bit PNG" {
     try std.testing.expectEqual(@as(u8, 1), (try image.getPixel(1, 0))[0]);
     try std.testing.expectEqual(@as(u8, 2), (try image.getPixel(2, 0))[0]);
     try std.testing.expectEqual(@as(u8, 3), (try image.getPixel(3, 0))[0]);
+
+    // getSample agrees with getPixel at 8 bits
+    try std.testing.expectEqual(@as(u16, 3), try image.getSample(3, 0));
 }
 
 test "decode 8x2 1-bit grayscale PNG" {
@@ -630,6 +715,18 @@ test "decode 8x2 1-bit grayscale PNG" {
     try std.testing.expectEqual(@as(u8, 0xAA), (try image.getRow(0))[0]);
     // Row 1: 0x55 = 01010101
     try std.testing.expectEqual(@as(u8, 0x55), (try image.getRow(1))[0]);
+
+    // getSample unpacks single bits
+    const row0 = [_]u16{ 1, 0, 1, 0, 1, 0, 1, 0 };
+    const row1 = [_]u16{ 0, 1, 0, 1, 0, 1, 0, 1 };
+    for (0..8) |x| {
+        try std.testing.expectEqual(row0[x], try image.getSample(@intCast(x), 0));
+        try std.testing.expectEqual(row1[x], try image.getSample(@intCast(x), 1));
+    }
+    // The last pixel used to read past the 2-byte buffer
+    try std.testing.expectError(error.SubBytePixel, image.getPixel(7, 1));
+    try std.testing.expectError(error.XOutOfBounds, image.getSample(8, 0));
+    try std.testing.expectError(error.YOutOfBounds, image.getSample(0, 2));
 }
 
 test "decode 4x2 4-bit grayscale PNG" {
@@ -659,6 +756,15 @@ test "decode 4x2 4-bit grayscale PNG" {
     // Row 1: 0xEF, 0xDC (pixels: 14, 15, 13, 12)
     try std.testing.expectEqual(@as(u8, 0xEF), (try image.getRow(1))[0]);
     try std.testing.expectEqual(@as(u8, 0xDC), (try image.getRow(1))[1]);
+
+    // getSample unpacks nibbles
+    const row0 = [_]u16{ 0, 1, 2, 3 };
+    const row1 = [_]u16{ 14, 15, 13, 12 };
+    for (0..4) |x| {
+        try std.testing.expectEqual(row0[x], try image.getSample(@intCast(x), 0));
+        try std.testing.expectEqual(row1[x], try image.getSample(@intCast(x), 1));
+    }
+    try std.testing.expectError(error.SubBytePixel, image.getPixel(0, 0));
 }
 
 test "decode 4x2 2-bit grayscale PNG" {
@@ -686,6 +792,15 @@ test "decode 4x2 2-bit grayscale PNG" {
     try std.testing.expectEqual(@as(u8, 0x1B), (try image.getRow(0))[0]);
     // Row 1: 0xE4 = 11_10_01_00
     try std.testing.expectEqual(@as(u8, 0xE4), (try image.getRow(1))[0]);
+
+    // getSample unpacks 2-bit pairs
+    const row0 = [_]u16{ 0, 1, 2, 3 };
+    const row1 = [_]u16{ 3, 2, 1, 0 };
+    for (0..4) |x| {
+        try std.testing.expectEqual(row0[x], try image.getSample(@intCast(x), 0));
+        try std.testing.expectEqual(row1[x], try image.getSample(@intCast(x), 1));
+    }
+    try std.testing.expectError(error.SubBytePixel, image.getPixel(3, 1));
 }
 
 test "decode 4x2 indexed 4-bit PNG" {
@@ -724,6 +839,17 @@ test "decode 4x2 indexed 4-bit PNG" {
     // Row 1: 0x32, 0x10 (indices: 3, 2, 1, 0)
     try std.testing.expectEqual(@as(u8, 0x32), (try image.getRow(1))[0]);
     try std.testing.expectEqual(@as(u8, 0x10), (try image.getRow(1))[1]);
+
+    // getSample returns palette indices, each within the palette
+    const row0 = [_]u16{ 0, 1, 2, 3 };
+    const row1 = [_]u16{ 3, 2, 1, 0 };
+    for (0..4) |x| {
+        const a = try image.getSample(@intCast(x), 0);
+        const b = try image.getSample(@intCast(x), 1);
+        try std.testing.expectEqual(row0[x], a);
+        try std.testing.expectEqual(row1[x], b);
+        try std.testing.expect(a < palette.len and b < palette.len);
+    }
 }
 
 test "decode rejects PNG with excessive dimensions" {

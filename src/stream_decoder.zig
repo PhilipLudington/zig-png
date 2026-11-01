@@ -125,9 +125,9 @@ pub const StreamDecoder = struct {
         return .{
             .allocator = allocator,
             .state = .signature,
-            .input_buffer = .{},
-            .idat_buffer = .{},
-            .raw_buffer = .{},
+            .input_buffer = .empty,
+            .idat_buffer = .empty,
+            .raw_buffer = .empty,
             .header = null,
             .palette = null,
             .current_row = 0,
@@ -520,7 +520,7 @@ test "StreamDecoder decode in chunks" {
     // Feed data in small chunks
     const chunk_size = 10;
     var offset: usize = 0;
-    var collected_rows = std.ArrayListUnmanaged(DecodedRow){};
+    var collected_rows = std.ArrayListUnmanaged(DecodedRow).empty;
     defer {
         for (collected_rows.items) |*row| {
             row.deinit();

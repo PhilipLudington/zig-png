@@ -111,7 +111,7 @@ pub fn StreamEncoder(comptime WriterType: type) type {
                 .header = header,
                 .palette = palette,
                 .options = options,
-                .filtered_buffer = .{},
+                .filtered_buffer = .empty,
                 .prev_row = null,
                 .current_row = 0,
                 .finished = false,
@@ -320,6 +320,17 @@ fn compressData(
 // Tests
 // ============================================================================
 
+/// Test-only writer that appends to an ArrayListUnmanaged.
+/// Zig 0.16 removed ArrayList.writer(); StreamEncoder needs only writeAll.
+const TestListWriter = struct {
+    list: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+
+    pub fn writeAll(self: TestListWriter, bytes: []const u8) Allocator.Error!void {
+        try self.list.appendSlice(self.allocator, bytes);
+    }
+};
+
 test "StreamEncoder encode simple grayscale" {
     const allocator = std.testing.allocator;
 
@@ -334,15 +345,15 @@ test "StreamEncoder encode simple grayscale" {
     };
 
     // Output buffer (Zig 0.15 ArrayListUnmanaged pattern)
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
     // Create encoder
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
@@ -379,14 +390,14 @@ test "StreamEncoder encode RGB" {
         .interlace_method = .none,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
@@ -421,14 +432,14 @@ test "StreamEncoder encode RGBA" {
         .interlace_method = .none,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
@@ -467,14 +478,14 @@ test "StreamEncoder encode indexed" {
         .{ .r = 255, .g = 255, .b = 255 },
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         &palette,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
@@ -508,14 +519,14 @@ test "StreamEncoder rejects interlaced" {
         .interlace_method = .adam7,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    const result = StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    const result = StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
 
@@ -535,14 +546,14 @@ test "StreamEncoder rejects indexed without palette" {
         .interlace_method = .none,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    const result = StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    const result = StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null, // No palette!
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
 
@@ -562,14 +573,14 @@ test "StreamEncoder rejects wrong row count" {
         .interlace_method = .none,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
@@ -612,14 +623,14 @@ test "StreamEncoder with different filter strategies" {
     };
 
     for (strategies) |strategy| {
-        var output = std.ArrayListUnmanaged(u8){};
+        var output = std.ArrayListUnmanaged(u8).empty;
         defer output.deinit(allocator);
 
-        var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+        var encoder = try StreamEncoder(TestListWriter).init(
             allocator,
             header,
             null,
-            output.writer(allocator),
+            TestListWriter{ .list = &output, .allocator = allocator },
             .{ .filter_strategy = strategy },
         );
         defer encoder.deinit();
@@ -654,14 +665,14 @@ test "StreamEncoder larger image" {
         .interlace_method = .none,
     };
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(allocator);
 
-    var encoder = try StreamEncoder(@TypeOf(output.writer(allocator))).init(
+    var encoder = try StreamEncoder(TestListWriter).init(
         allocator,
         header,
         null,
-        output.writer(allocator),
+        TestListWriter{ .list = &output, .allocator = allocator },
         .{},
     );
     defer encoder.deinit();
