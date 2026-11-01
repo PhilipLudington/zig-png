@@ -398,6 +398,30 @@ test "getPixel returns error on out of bounds access" {
     try std.testing.expectError(error.YOutOfBounds, image.getPixel(0, 100));
 }
 
+test "getPixel never hands back packed bytes on a 1-bit image" {
+    // Bug 1: 8x2 1-bit grayscale, rows 0xAA and 0x55 (one byte per row).
+    // getPixel offset by x bytes, not x bits, so it returned a byte holding
+    // eight pixels, and at (7, 1) read past the 2-byte buffer.
+    const test_png = [_]u8{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x4D, 0xEF, 0xA0,
+        0x40, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x58, 0xC5, 0x10, 0x0A,
+        0x00, 0x02, 0x57, 0x01, 0x00, 0x58, 0xB2, 0xCA, 0x23, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    var image = try decode(std.testing.allocator, &test_png);
+    defer image.deinit();
+
+    // A valid in-bounds pixel must not be reported as a buffer overrun.
+    if (image.getPixel(7, 1)) |_| {
+        return error.TestUnexpectedResult; // a slice cannot hold one bit
+    } else |err| {
+        try std.testing.expect(err != error.BufferOutOfBounds);
+    }
+    // Nor may it return the packed byte 0xAA as pixel (1, 0).
+    if (image.getPixel(1, 0)) |_| return error.TestUnexpectedResult else |_| {}
+}
+
 test "getRow returns error on out of bounds access" {
     // A 2x2 grayscale PNG
     const test_png = [_]u8{
